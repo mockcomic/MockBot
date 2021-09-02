@@ -1,0 +1,38 @@
+{
+  "name": "mockbot",
+  "version": "2.0.0",
+  "description": "discord utility bot",
+  "main": "bot.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "dependencies": {
+    "@discordjs/opus": "^0.5.3",
+    "discord.js": "^12.5.3",
+    "distube": "^2.8.18",
+    "dotenv": "^10.0.0",
+    "ffmpeg-static": "^4.4.0",
+    "node-fetch": "^2.6.1",
+    "ws": "^7.5.3",
+    "ytdl-core": "^4.9.1"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mockcomic/MockBot.git"
+  },
+  "keywords": [
+    "disocrd",
+    "bot",
+    "mockcomic"
+  ],
+  "author": "kurtis hight",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/mockcomic/MockBot/issues"
+  },
+  "homepage": "https://github.com/mockcomic/MockBot#readme"
+}
