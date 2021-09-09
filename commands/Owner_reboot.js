@@ -22,6 +22,6 @@ module.exports = async function (message, args, commands) {
             message.channel.send(`stdout: ${stdout}`);
         });
     } else {
-        message.channel.send("Access Denied")
+        message.channel.send("⛔Access Denied⛔");
     }
 }

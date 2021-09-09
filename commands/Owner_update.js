@@ -28,6 +28,6 @@ module.exports = async function (message, args, commands) {
         consoleInput('npm install');
         consoleInput('sudo reboot');
     } else {
-        message.channel.send("Access Denied");
+        message.channel.send("⛔Access Denied⛔");
     }
 }

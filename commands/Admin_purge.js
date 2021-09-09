@@ -9,11 +9,15 @@ module.exports = async function (message, arg, command) {
             } else if (number >100){
                 message.reply("Value larger than 100");
             }else {
-                message.channel.bulkDelete(number);
+                    for (let index = 0; index < number; index++) {
+                        message.channel.bulkDelete(1);
+                    }
             };
         } catch (error) {
             console.log(error);
             message.channel.send(`Uh oh, error \n ${error}`);
         };
+    }else{
+        message.channel.send("⛔Access Denied⛔");
     }
 }
