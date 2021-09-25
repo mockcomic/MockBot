@@ -16,7 +16,9 @@
     "ws": "^7.5.3",
     "ytdl-core": "^4.9.1"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "nodemon": "^2.0.13"
+  },
   "scripts": {
     "start": "node bot.js"
   },
