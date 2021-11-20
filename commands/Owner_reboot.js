@@ -8,7 +8,7 @@ module.exports = async function (message, args, commands) {
         } = require("child_process");
         message.channel.send(cc.embed.setDescription('Goodbye :,('))
 
-        exec('reboot', (error, stdout, stderr) => {
+        exec('shutdown /r', (error, stdout, stderr) => {
             if (error) {
                 message.channel.send(`error: ${error.message}`);
                 return;

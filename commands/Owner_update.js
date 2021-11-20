@@ -6,7 +6,7 @@ module.exports = async function (message, args, commands) {
     } = require("child_process");
 
     function consoleInput(write) {
-        exec(`${`${write}`.join(" ")}`, (error, stdout, stderr) => {
+        exec(write, (error, stdout, stderr) => {
             if (error) {
                 message.channel.send(`error: ${error.message}`);
                 return;
@@ -23,10 +23,6 @@ module.exports = async function (message, args, commands) {
         consoleInput('git stash');
         consoleInput('git stash drop');
         consoleInput('git pull');
-        consoleInput('mockcomic');
-        consoleInput('Acdf#1221991');
-        consoleInput('npm install');
-        consoleInput('sudo reboot');
     } else {
         message.channel.send("⛔Access Denied⛔");
     }
