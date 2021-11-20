@@ -2,7 +2,6 @@
 module.exports = async function (message, arg, commands) {    
     require("dotenv").config();
     if (message.author.id == process.env.OWNER) {
-        const f = require('../lib/functions');
         const {exec} = require("child_process");
 
         exec(`${arg.join(" ")}`, (error, stdout, stderr) => {
