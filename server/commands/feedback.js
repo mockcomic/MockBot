@@ -1,7 +1,7 @@
 //work in progress
 
 module.exports = async function (message, tokens, command) {
-    var fs = require("fs")
+    let fs = require("fs")
     const content = `${message.author.username} ${tokens}\n`
 
     fs.appendFile('./feedback.txt', content, err => {
