@@ -1,6 +1,16 @@
 require('dotenv').config();
 const fetch = require('node-fetch');
 
+const parseResponse = message => {
+	const messageArr = [];
+	while (message.length > 199) {
+		messageArr.push(message.slice(0, 199));
+		message = message.slice(199, message.length);
+	}
+	messageArr.push(message);
+	return messageArr;
+};
+
 module.exports = async function (message, args, commands) {
 	fetch('https://api.openai.com/v1/chat/completions', {
 		method: 'POST',
@@ -16,7 +26,12 @@ module.exports = async function (message, args, commands) {
 		.then(response => response.json())
 		.then(data => {
 			console.log(args + ':' + data.choices[0].message.content);
-			message.channel.send(data.choices[0].message.content);
+
+			const result = parseResponse(data.choices[0].message.content);
+
+			result.forEach(msg => {
+				message.channel.send(msg);
+			});
 		})
 		.catch(error => {
 			console.error(error);
