@@ -6,12 +6,16 @@ Currently, MockBot operates efficiently on a Raspberry Pi 4 running Raspbian, sh
 
 ## Setup and Configuration
 To use MockBot on your server, you'll need to set up a .env file in the project root directory, containing your Discord token, Tenor API key, and ChatGPT API key. The structure of the file should be as follows:
-`
-TOKEN = your-discord-token-here
+<br>
+TOKEN = your-discord-token-here 
+<br>
 CLIENT = your-key-here
+<br>
 TENORKEY = your-tenor-api-key-here
+<br>
 GPT = your-chatgpt-api-key-here
-`
+<br>
+
     
 ## Contributions and Feedback
 Feel free to fork the repository, make changes, and submit pull requests. Contributions are always welcome! If you prefer to use the bot as-is, you can simply invite it to your server.
