@@ -1,5 +1,5 @@
 
-# MockBot
+# MockBot: Your Interactive Discord Companion
 MockBot is a delightful and convenient Discord bot that I've been developing as a personal project. Its purpose is to bring a wide range of enjoyable and practical utilities to your Discord server, enhancing interactivity and user-friendliness.
 
 Currently, MockBot operates efficiently on a Raspberry Pi 4 running Raspbian, showcasing its ability to function seamlessly on minimal hardware.
