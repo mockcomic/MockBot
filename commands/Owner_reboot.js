@@ -1,7 +1,7 @@
 module.exports = async function (message, args, commands) {
     const cc = require('../bot');
     require("dotenv").config();
-    
+
     if (message.author.id == process.env.OWNER) {
         const {
             exec
