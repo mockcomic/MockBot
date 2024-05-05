@@ -12,6 +12,9 @@ const parseResponse = message => {
 };
 
 module.exports = async function (message, args, commands) {
+	if (process.env.GPT == null) {
+		return message.channel.send('Error: GPT API key not set');
+	}
 	fetch('https://api.openai.com/v1/chat/completions', {
 		method: 'POST',
 		headers: {
