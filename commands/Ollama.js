@@ -32,8 +32,9 @@ module.exports = async function (message, args, commands) {
 		const data = await response.json();
 		const result = parseResponse(data.response);
 
+		message.reply('');
 		result.forEach(msg => {
-			message.channel.reply(msg);
+			message.channel.send(msg);
 		});
 	} else {
 		console.error(response.status);
