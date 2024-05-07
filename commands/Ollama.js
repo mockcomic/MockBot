@@ -4,9 +4,9 @@ const Discord = require('discord.js');
 
 const parseResponse = message => {
 	const messageArr = [];
-	while (message.length > 199) {
-		messageArr.push(message.slice(0, 1999));
-		message = message.slice(199, message.length);
+	while (message.length > 2000) {
+		messageArr.push(message.slice(0, 2000));
+		message = message.slice(2000, message.length);
 	}
 	messageArr.push(message);
 	return messageArr;
@@ -23,7 +23,7 @@ module.exports = async function (message, args, commands) {
 		body: JSON.stringify({
 			role: 'user',
 			model: 'dolphin-mixtral',
-			prompt: args.join(' '),
+			prompt: `${args.join(' ')}, limit the response to 2000 characters.`,
 			stream: false,
 		}),
 	});
