@@ -16,7 +16,7 @@ fs.readdir('./commands/', (err, files) => {
 
 			console.log(`Loaded ${file}`);
 
-			commands[file.slice(6, -3)] = nameFile;
+			commands[file.slice(6, -3).toLowerCase()] = nameFile;
 		} else {
 			let nameFile = file;
 
@@ -24,7 +24,7 @@ fs.readdir('./commands/', (err, files) => {
 
 			console.log(`Loaded ${file}`);
 
-			commands[file.slice(0, -3)] = nameFile;
+			commands[file.slice(0, -3).toLowerCase()] = nameFile;
 		}
 	});
 });
@@ -36,7 +36,7 @@ module.exports = async function (message) {
 
 	let command = args.shift();
 
-	command = command.substring(1);
+	command = command.substring(1).toLowerCase();
 
 	try {
 		commands[command](message, args, command, commands);

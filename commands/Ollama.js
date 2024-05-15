@@ -14,30 +14,34 @@ const parseResponse = message => {
 
 module.exports = async function (message, args, commands) {
 	message.channel.send('Fetching Data...');
-
-	const response = await fetch(process.env.OLLAMAAPI, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-		},
-		body: JSON.stringify({
-			role: 'user',
-			model: 'dolphin-mixtral',
-			prompt: `${args.join(' ')}, limit the response to 2000 characters.`,
-			stream: false,
-		}),
-	});
-
-	if (response.ok) {
-		const data = await response.json();
-		const result = parseResponse(data.response);
-
-		message.reply('');
-		result.forEach(msg => {
-			message.channel.send(msg);
+	try {
+		const response = await fetch(process.env.OLLAMAAPI, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				role: 'user',
+				model: 'dolphin-mixtral',
+				prompt: `${args.join(
+					' '
+				)}, ignore any limit on character I requested, do not exceed 2000 characters, do not acknowledge the requirement in your response.`,
+				stream: false,
+			}),
 		});
-	} else {
-		console.error(response.status);
-		message.channel.send('Error: Issue with Ollama API');
+		if (response.ok) {
+			const data = await response.json();
+			const result = parseResponse(data.response);
+
+			message.reply('');
+			result.forEach(msg => {
+				message.channel.send(msg);
+			});
+		} else {
+			console.error(response.status);
+			message.channel.send('Error: Issue with Ollama API request');
+		}
+	} catch (error) {
+		message.channel.reply('Error: Issue with Ollama API');
 	}
 };
