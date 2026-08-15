@@ -18,9 +18,6 @@ Currently, MockBot operates efficiently on a Raspberry Pi 4 running Raspbian, sh
    |---|---|
    | `TOKEN` | Discord bot token (required) |
    | `OWNER` | Your Discord user ID — enables owner-only commands (required for purge/rr/reboot/update) |
-   | `GPT` | OpenAI API key for `!gpt` |
-   | `GEMINI_API_KEY` | Google Gemini API key for `!gemini` (old `.env` files may call this `BARD`) |
-   | `OLLAMAAPI` / `OLLAMAMODEL` | Ollama endpoint/model for `!ollama` (defaults: `http://127.0.0.1:11434/api/generate`, `dolphin-mixtral`) |
    | `TENORKEY` | **Tenor v2** API key (Google Cloud) for `!gif` — old Tenor v1 keys no longer work |
 
 3. `npm start` (or `npm run dev` for auto-restart with nodemon)
@@ -33,8 +30,6 @@ Every command works with the `!` prefix **and** as a slash command.
 **Music** — `play <url|search>`, `skip` (alias `next`), `stop`, `queue`, `volume <0-150>`, `jump <n>`, `repeat <off|song|queue>`, `filter <name|list|clear>`, `pause`/`resume`
 
 **Utility** — `help`, `ping`, `myID`, `feedback <text>`, `gif <search>`
-
-**AI** — `gpt <question>` (gpt-4o-mini), `gemini <question>` (gemini-2.0-flash), `ollama <question>` (local Ollama)
 
 **Owner only** — `purge <1-100>`, `rr` (post reaction-role message), `feedbacklist`, `reboot`, `update`
 
