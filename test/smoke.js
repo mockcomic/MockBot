@@ -30,7 +30,7 @@ const { DisTube } = require('distube');
 
 await check('loadCommands registry', () => {
     const { commands, get } = loadCommands();
-    assert.ok(commands.size >= 19, `expected >=19 commands, got ${commands.size}`);
+    assert.ok(commands.size >= 18, `expected >=18 commands, got ${commands.size}`);
     assert.ok(get('play')?.name === 'play', 'play resolvable');
     assert.ok(get('next')?.name === 'skip', 'alias next -> skip');
     assert.ok(get('loop')?.name === 'repeat', 'alias loop -> repeat');
@@ -47,7 +47,7 @@ await check('slash builders serialize', () => {
         assert.ok(!names.has(json.name), `duplicate slash name ${json.name}`);
         names.add(json.name);
     }
-    assert.ok(names.size >= 19, `expected >=19 slash commands, got ${names.size}`);
+    assert.ok(names.size >= 18, `expected >=18 slash commands, got ${names.size}`);
     console.log(`        slash commands: ${[...names].join(', ')}`);
 });
 

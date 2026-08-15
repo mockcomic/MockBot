@@ -18,7 +18,6 @@ Currently, MockBot operates efficiently on a Raspberry Pi 4 running Raspbian, sh
    |---|---|
    | `TOKEN` | Discord bot token (required) |
    | `OWNER` | Your Discord user ID — enables owner-only commands (required for purge/rr/reboot/update) |
-   | `TENORKEY` | **Tenor v2** API key (Google Cloud) for `!gif` — old Tenor v1 keys no longer work |
 
 3. `npm start` (or `npm run dev` for auto-restart with nodemon)
 
@@ -29,7 +28,7 @@ Every command works with the `!` prefix **and** as a slash command.
 
 **Music** — `play <url|search>`, `skip` (alias `next`), `stop`, `queue`, `volume <0-150>`, `jump <n>`, `repeat <off|song|queue>`, `filter <name|list|clear>`, `pause`/`resume`
 
-**Utility** — `help`, `ping`, `myID`, `feedback <text>`, `gif <search>`
+**Utility** — `help`, `ping`, `myID`, `feedback <text>`
 
 **Owner only** — `purge <1-100>`, `rr` (post reaction-role message), `feedbacklist`, `reboot`, `update`
 
