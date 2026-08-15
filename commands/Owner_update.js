@@ -1,29 +1,32 @@
-module.exports = async function (message, args, commands) {
-    require("dotenv").config();
+const { exec } = require('node:child_process');
+const { SlashCommandBuilder } = require('discord.js');
 
-    const {
-        exec
-    } = require("child_process");
-
-    function consoleInput(write) {
-        exec(write, (error, stdout, stderr) => {
-            if (error) {
-                message.channel.send(`error: ${error.message}`);
-                return;
-            }
-            if (stderr) {
-                message.channel.send(`stderr: ${stderr}`);
-                return;
-            }
-            message.channel.send(`stdout: ${stdout}`);
+const run = command =>
+    new Promise(resolve => {
+        exec(command, (error, stdout, stderr) => {
+            resolve({ command, error, stdout: stdout?.trim(), stderr: stderr?.trim() });
         });
-    }
+    });
 
-    if (message.author.id == process.env.OWNER) {
-        consoleInput('git stash');
-        consoleInput('git stash drop');
-        consoleInput('git pull');
-    } else {
-        message.channel.send("⛔Access Denied⛔");
-    }
-}
+module.exports = {
+    name: 'update',
+    ownerOnly: true,
+    description: 'Pull the latest bot code from git',
+    usage: 'update',
+    data: new SlashCommandBuilder().setName('update').setDescription('Pull the latest bot code from git'),
+
+    async execute(ctx) {
+        if (ctx.isSlash) await ctx.defer();
+
+        const results = [];
+        for (const command of ['git stash', 'git stash drop', 'git pull']) {
+            const result = await run(command);
+            results.push(
+                `$ ${result.command}\n` +
+                `${result.error ? `error: ${result.error.message}` : result.stderr || result.stdout || '(no output)'}`,
+            );
+        }
+
+        return ctx.reply(`🔁 Update finished. Restart the bot to apply changes.\n\`\`\`\n${results.join('\n\n')}\n\`\`\``);
+    },
+};

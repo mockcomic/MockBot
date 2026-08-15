@@ -1,50 +1,48 @@
-const fs = require('fs');
-const commands = {};
+const fs = require('node:fs');
+const path = require('node:path');
 
-fs.readdir('./commands/', (err, files) => {
-	if (err) return console.log('Could not find any commands!');
+/**
+ * Load every command module from ./commands into a registry.
+ *
+ * A command module exports:
+ *   name        - canonical (lowercase) command name
+ *   aliases     - optional alternative names
+ *   description - shown in help / slash registration
+ *   usage       - optional prefix usage string
+ *   ownerOnly   - optional, restrict to bot owner
+ *   adminOnly   - optional, restrict to bot owner/admins
+ *   data        - optional SlashCommandBuilder (omit = prefix only)
+ *   execute(ctx)- the command body
+ */
+function loadCommands() {
+    const commands = new Map();
+    const aliases = new Map();
+    const dir = path.join(__dirname, 'commands');
 
-	const jsFiles = files.filter(f => f.split('.').pop() === 'js');
+    for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.js'))) {
+        try {
+            const cmd = require(path.join(dir, file));
+            if (!cmd || typeof cmd.execute !== 'function' || !cmd.name) {
+                console.warn(`[commands] Skipped ${file}: missing name or execute`);
+                continue;
+            }
+            cmd.name = cmd.name.toLowerCase();
+            commands.set(cmd.name, cmd);
+            for (const alias of cmd.aliases ?? []) aliases.set(alias.toLowerCase(), cmd.name);
+            console.log(`Loaded command: ${cmd.name}`);
+        } catch (err) {
+            console.error(`[commands] Failed to load ${file}:`, err);
+        }
+    }
 
-	if (jsFiles.length <= 0) return console.log('Could not find any commands!');
+    return {
+        commands,
+        aliases,
+        get(name) {
+            const key = String(name ?? '').toLowerCase();
+            return commands.get(aliases.get(key) ?? key);
+        },
+    };
+}
 
-	jsFiles.forEach(file => {
-		if (file.startsWith('Admin_') || file.startsWith('Owner_')) {
-			let nameFile = file;
-
-			nameFile = require(`./commands/${file}`);
-
-			console.log(`Loaded ${file}`);
-
-			commands[file.slice(6, -3).toLowerCase()] = nameFile;
-		} else {
-			let nameFile = file;
-
-			nameFile = require(`./commands/${file}`);
-
-			console.log(`Loaded ${file}`);
-
-			commands[file.slice(0, -3).toLowerCase()] = nameFile;
-		}
-	});
-});
-
-module.exports = async function (message) {
-	if (message.author.bot) return;
-
-	let args = message.content.split(' ');
-
-	let command = args.shift();
-
-	command = command.substring(1).toLowerCase();
-
-	try {
-		commands[command](message, args, command, commands);
-	} catch (err) {
-		message.reply(`[commands_Handler] ${message} is not a command`);
-	}
-};
-
-module.export = {
-	commands,
-};
+module.exports = { loadCommands };

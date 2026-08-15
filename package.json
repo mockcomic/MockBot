@@ -1,31 +1,36 @@
 {
   "name": "mockbot",
-  "version": "2.0.0",
-  "description": "discord utility bot",
+  "version": "3.0.0",
+  "description": "discord utility & music bot",
   "main": "bot.js",
-  "directories": {
-    "lib": "lib"
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
-    "discord.js": "^12.5.3",
-    "distube": "^2.8.18",
-    "dotenv": "^10.0.0",
-    "node-fetch": "^2.6.1",
-    "ws": "^7.5.3"
+    "@discordjs/voice": "^0.18.0",
+    "@distube/yt-dlp": "^2.0.1",
+    "discord.js": "^14.21.0",
+    "distube": "^5.1.1",
+    "dotenv": "^16.6.1",
+    "ffmpeg-static": "^5.2.0",
+    "libsodium-wrappers": "^0.7.15",
+    "opusscript": "^0.1.1"
   },
   "devDependencies": {
     "nodemon": "^2.0.13"
   },
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "dev": "nodemon bot.js"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mockcomic/MockBot.git"
   },
   "keywords": [
-    "disocrd",
+    "discord",
     "bot",
+    "music",
     "mockcomic"
   ],
   "author": "kurtis hight",
@@ -33,5 +38,9 @@
   "bugs": {
     "url": "https://github.com/mockcomic/MockBot/issues"
   },
-  "homepage": "https://github.com/mockcomic/MockBot#readme"
+  "homepage": "https://github.com/mockcomic/MockBot#readme",
+  "allowScripts": {
+    "@distube/yt-dlp@2.0.1": true,
+    "ffmpeg-static@5.3.0": true
+  }
 }

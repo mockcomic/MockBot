@@ -1,18 +1,30 @@
-//work in progress
-module.exports = async function (message, tokens, command) {
-    const fs = require('fs')
-    require("dotenv").config();
+const fs = require('node:fs');
+const path = require('node:path');
+const { SlashCommandBuilder } = require('discord.js');
 
-    if (message.author.id !== process.env.OWNER) {
+const FEEDBACK_FILE = path.join(__dirname, '..', 'feedback.txt');
 
-        fs.readFile('./sample.txt', (err, data) => {
-            if (err) {
-                console.error(err)
-                return
-            }
-            message.channel.send(data)
-        })
-    }else{
-        message.channel.send("⛔Access Denied⛔");
-    }
-}
+module.exports = {
+    name: 'feedbacklist',
+    ownerOnly: true,
+    description: 'List all saved feedback',
+    usage: 'feedbacklist',
+    data: new SlashCommandBuilder().setName('feedbacklist').setDescription('List all saved feedback'),
+
+    async execute(ctx) {
+        let content = '';
+        try {
+            content = (await fs.promises.readFile(FEEDBACK_FILE, 'utf8')).trim();
+        } catch {
+            return ctx.reply('No feedback has been saved yet.');
+        }
+        if (!content) return ctx.reply('No feedback has been saved yet.');
+
+        let message = `**Feedback (total ${content.split('\n').length} entries):**\n${content}`;
+        while (message.length > 2000) {
+            await ctx.reply(message.slice(0, 2000));
+            message = message.slice(2000);
+        }
+        return ctx.reply(message);
+    },
+};

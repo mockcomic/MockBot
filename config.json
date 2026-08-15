@@ -16,8 +16,23 @@
         "seven": "7️⃣",
         "eight": "8️⃣",
         "nine": "9️⃣",
-        "ten":"🔟",
-        "warning":"⚠️",
-        "noentry":"⛔"
+        "ten": "🔟",
+        "warning": "⚠️",
+        "noentry": "⛔"
+    },
+    "reactionRoles": {
+        "enabled": true,
+        "channelId": "845386774327197726",
+        "roles": [
+            { "name": "HOTS", "emoji": "1️⃣" },
+            { "name": "LOL", "emoji": "2️⃣" },
+            { "name": "Hunt", "emoji": "3️⃣" },
+            { "name": "Overwatch", "emoji": "4️⃣" },
+            { "name": "StarCraft2", "emoji": "5️⃣" },
+            { "name": "Northgard", "emoji": "6️⃣" },
+            { "name": "Rocket League", "emoji": "7️⃣" },
+            { "name": "Tarkov", "emoji": "8️⃣" },
+            { "name": "Remnant", "emoji": "9️⃣" }
+        ]
     }
 }

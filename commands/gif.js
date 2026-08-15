@@ -1,18 +1,50 @@
-require("dotenv").config();
+const { SlashCommandBuilder } = require('discord.js');
 
-const tenorKey = process.env.TENORKEY
-const fetch = require('node-fetch')
+/**
+ * Tenor GIF search (Tenor API v2 — the v1 API was shut down in 2024).
+ * Requires a Tenor v2 key (Google Cloud) in .env as TENORKEY.
+ */
+module.exports = {
+    name: 'gif',
+    description: 'Search for a GIF on Tenor',
+    usage: 'gif <search terms>',
+    data: new SlashCommandBuilder()
+        .setName('gif')
+        .setDescription('Search for a GIF on Tenor')
+        .addStringOption(option =>
+            option.setName('query').setDescription('What to search for').setRequired(true),
+        ),
 
-module.exports = async function (message, args, commands) {
+    async execute(ctx) {
+        if (!process.env.TENORKEY) {
+            return ctx.reply('❌ Tenor API key not set. Add `TENORKEY` to .env (Tenor v2 key from Google Cloud).');
+        }
 
-  let url = `https://api.tenor.com/v1/search?q=${args}&key=${tenorKey}&ContentFilter=off`
-  let response = await fetch(url);
-  let json = await response.json();
-  const index = Math.floor(Math.random() * json.results.length)
+        const query = ctx.args.join(' ').trim();
+        if (!query) return ctx.reply(`Usage: \`${ctx.config.prefix}gif <search terms>\``);
 
-  let result = json.results[index] ?
-    json.results[index].url :
-    "No gif was found with your search parameters.";
+        const url =
+            `https://tenor.googleapis.com/v2/search` +
+            `?q=${encodeURIComponent(query)}` +
+            `&key=${encodeURIComponent(process.env.TENORKEY)}` +
+            `&client_key=mockbot&contentfilter=off&media_filter=tinygif,gif&limit=10`;
 
-  message.channel.send(result)
-}
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`Tenor API error ${response.status}`);
+            const json = await response.json();
+
+            const results = json.results ?? [];
+            if (results.length === 0) return ctx.reply('No gif was found with your search parameters.');
+
+            const pick = results[Math.floor(Math.random() * results.length)];
+            const gifUrl = pick.media_formats?.tinygif?.url ?? pick.media_formats?.gif?.url;
+            if (!gifUrl) return ctx.reply('No gif was found with your search parameters.');
+
+            return ctx.reply(gifUrl);
+        } catch (err) {
+            console.error('[gif]', err);
+            return ctx.reply('❌ GIF search failed. Check that TENORKEY is a valid Tenor v2 key.');
+        }
+    },
+};

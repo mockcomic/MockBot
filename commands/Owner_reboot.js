@@ -1,23 +1,21 @@
-module.exports = async function (message, args, commands) {
-	const cc = require('../bot');
-	require('dotenv').config();
+const { exec } = require('node:child_process');
+const { SlashCommandBuilder } = require('discord.js');
 
-	if (message.author.id == process.env.OWNER) {
-		const { exec } = require('child_process');
-		message.channel.send(cc.embed.setDescription('Goodbye :,('));
+module.exports = {
+    name: 'reboot',
+    ownerOnly: true,
+    description: 'Reboot the machine the bot runs on',
+    usage: 'reboot',
+    data: new SlashCommandBuilder().setName('reboot').setDescription('Reboot the machine the bot runs on'),
 
-		exec('shutdown /r', (error, stdout, stderr) => {
-			if (error) {
-				message.channel.send(`error: ${error.message}`);
-				return;
-			}
-			if (stderr) {
-				message.channel.send(`stderr: ${stderr}`);
-				return;
-			}
-			message.channel.send(`stdout: ${stdout}`);
-		});
-	} else {
-		message.channel.send('⛔Access Denied⛔');
-	}
+    async execute(ctx) {
+        await ctx.reply('Goodbye :,(');
+
+        exec('shutdown /r', (error, stdout, stderr) => {
+            // Only reached if the shutdown command itself fails.
+            if (error) return console.error('[reboot]', error.message);
+            if (stderr) return console.error('[reboot]', stderr);
+            console.log('[reboot]', stdout);
+        });
+    },
 };

@@ -1,47 +1,58 @@
-require('dotenv').config();
-const fetch = require('node-fetch');
-const Discord = require('discord.js');
+const { SlashCommandBuilder } = require('discord.js');
 
-const parseResponse = message => {
-	const messageArr = [];
-	while (message.length > 2000) {
-		messageArr.push(message.slice(0, 2000));
-		message = message.slice(2000, message.length);
-	}
-	messageArr.push(message);
-	return messageArr;
+const DEFAULT_ENDPOINT = 'http://127.0.0.1:11434/api/generate';
+const DEFAULT_MODEL = 'dolphin-mixtral';
+
+/** Split a long reply into Discord-safe chunks. */
+const chunkMessage = (message, size = 2000) => {
+    const chunks = [];
+    while (message.length > size) {
+        chunks.push(message.slice(0, size));
+        message = message.slice(size);
+    }
+    chunks.push(message);
+    return chunks;
 };
 
-module.exports = async function (message, args, commands) {
-	message.channel.send('Fetching Data...');
-	try {
-		const response = await fetch(process.env.OLLAMAAPI, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-			},
-			body: JSON.stringify({
-				role: 'user',
-				model: 'dolphin-mixtral',
-				prompt: `${args.join(
-					' '
-				)}, ignore any limit on character I requested, do not exceed 2000 characters, do not acknowledge the requirement in your response.`,
-				stream: false,
-			}),
-		});
-		if (response.ok) {
-			const data = await response.json();
-			const result = parseResponse(data.response);
+module.exports = {
+    name: 'ollama',
+    description: 'Ask a local Ollama model a question',
+    usage: 'ollama <question>',
+    data: new SlashCommandBuilder()
+        .setName('ollama')
+        .setDescription('Ask a local Ollama model a question')
+        .addStringOption(option =>
+            option.setName('prompt').setDescription('Your question').setRequired(true),
+        ),
 
-			message.reply('');
-			result.forEach(msg => {
-				message.channel.send(msg);
-			});
-		} else {
-			console.error(response.status);
-			message.channel.send('Error: Issue with Ollama API request');
-		}
-	} catch (error) {
-		message.channel.reply('Error: Issue with Ollama API');
-	}
+    async execute(ctx) {
+        const prompt = ctx.args.join(' ').trim();
+        if (!prompt) return ctx.reply(`Usage: \`${ctx.config.prefix}ollama <question>\``);
+
+        if (ctx.isSlash) await ctx.defer();
+        else await ctx.send('Fetching Data…').catch(() => {});
+
+        const endpoint = process.env.OLLAMAAPI ?? DEFAULT_ENDPOINT;
+        const model = process.env.OLLAMAMODEL ?? DEFAULT_MODEL;
+
+        try {
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model, prompt, stream: false }),
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            const data = await response.json();
+            const answer = data.response?.trim();
+            if (!answer) throw new Error('Empty response from Ollama');
+
+            for (const chunk of chunkMessage(answer)) {
+                await ctx.reply(chunk);
+            }
+        } catch (err) {
+            console.error('[ollama]', err);
+            return ctx.reply(`❌ Ollama error: ${err.message} (is Ollama running at ${endpoint}?)`);
+        }
+    },
 };
