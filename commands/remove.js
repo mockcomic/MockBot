@@ -27,7 +27,7 @@ module.exports = {
         const raw = String(ctx.args[0] ?? '').trim().toLowerCase();
         if (!raw) return ctx.reply(`Usage: \`${ctx.config.prefix}remove <position | all>\``);
 
-        if (raw === 'all' || raw === 'queue') {
+        if (raw === 'all') {
             const removed = queue.songs.splice(1);
             return ctx.reply(removed.length
                 ? `🗑️ Removed ${removed.length} queued song(s). The playing song continues.`
