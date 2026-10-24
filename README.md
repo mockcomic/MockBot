@@ -216,11 +216,22 @@ A `feedback.txt` left in the repo root by an older install is moved into `data/`
   change breaks playback, restart the bot or `npm install @distube/yt-dlp@latest`.
 - **`yt-dlp timed out`** — a slow or blocked network to the video host; retry, and
   check that the Pi has outbound HTTPS.
+- **`Cannot connect to the voice channel after 30 seconds`** — run
+  `node test/voice-probe.js` on the machine the bot runs on; it prints the
+  state trail of a bare voice join and names where the handshake dies. The
+  usual causes: outbound UDP to Discord's voice servers blocked and the TCP
+  fallback also refused (firewall/ISP), or the bot missing **Connect** on the
+  channel. The "30 seconds" wording is DisTube's fixed timeout, so the message
+  is identical even when Discord rejects the session outright — the probe is
+  what tells these apart.
 - **`ffmpeg not found`** — `ffmpeg-static` is bundled; otherwise put ffmpeg on PATH.
 - **`TOKEN is missing` / `Login failed`** — check your `.env` file.
 - **Web portal did not start** — both `WEB_USER` and `WEB_PASS` must be set, and
   `WEB_PORT` (default 8787) must be free; the boot log says which of the two it
-  was.
+  was. Remember `.env` is only read at boot: restart after editing it.
+- **Web portal rejects the right password** — an unquoted `#` in a `.env` value
+  starts a comment, so `WEB_PASS=abc#123` arrives as just `abc`. Quote the
+  value: `WEB_PASS="abc#123"`.
 - **Portal unreachable from another device** — `WEB_BIND` must not be
   `127.0.0.1` (that locks it to the bot's machine), and the OS firewall has to
   allow Node on the private network.
