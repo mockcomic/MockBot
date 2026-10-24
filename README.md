@@ -11,8 +11,11 @@ Raspberry Pi 4.
 
 - **Node.js 22.12 or newer** — the installed DisTube declares `>=22.12.0`
   (`node -v` to check; the bot warns at startup if you are behind).
-- A Discord application/bot with the **MESSAGE CONTENT** privileged intent enabled
-  (Developer Portal → your application → Bot → Privileged Gateway Intents).
+- A Discord application/bot with the **MESSAGE CONTENT** and **SERVER MEMBERS**
+  privileged intents enabled (Developer Portal → your application → Bot →
+  Privileged Gateway Intents). MESSAGE CONTENT powers the `!prefix` commands;
+  SERVER MEMBERS powers the join welcome, auto-role and member join/leave
+  modlog lines.
 - Invited with the `bot` and `applications.commands` scopes and at least:
   Send Messages, Manage Messages, Read Message History, Embed Links, Add Reactions,
   Connect, Speak. For `timeout`: Moderate Members; for `modlog`/`prefix`: Manage Server.
@@ -115,7 +118,7 @@ from people who cannot run them.
 
 | Command | Aliases | Notes |
 |---|---|---|
-| `play <url \| search>` | `p` | Plain text searches YouTube; `watch?v=…&list=…` queues the single video |
+| `play <url \| search>` | `p` | Plain text searches YouTube and shows a top-5 picker — choose the song you meant. `play! <terms>` (or the slash `direct` option) auto-picks the top result instead, like old versions. `watch?v=…&list=…` queues the single video |
 | `skip` | `next`, `s` | Instant for owner/requester/solo listener; otherwise a listener-majority vote (`voteskip` toggles) |
 | `previous` | `prev`, `back` | Walks the saved song history |
 | `stop` | | Clears the queue and disconnects |
@@ -127,6 +130,7 @@ from people who cannot run them.
 | `jump <position>` | | Positions match `queue`; `2` = next song, `-1` = previous |
 | `repeat <off\|song\|queue>` | `loop` | |
 | `remove <position\|all>` | `rm` | Row 1 is playing — use `skip` for that |
+| `move <position> <to>` | `moveto` | Reorder the queue without re-adding |
 | `clear` | | Empties the queue but lets the current song finish |
 | `seek <seconds\|mm:ss>` | | `seek 90`, `seek 1:30`; refused on live streams |
 | `shuffle` | `mix` | Keeps the playing song, shuffles the rest |
@@ -136,6 +140,8 @@ from people who cannot run them.
 | `autoplay <on\|off\|status>` | `auto` | When the list ends, queue the first other song of the YouTube radio mix |
 | `247` | `stay` | Keep the voice connection when idle; `leave` is the manual exit |
 | `voteskip <on\|off\|status>` | | Toggle the listener-majority skip rule for this server |
+| `sponsorblock <on\|off\|status>` | `sb` | Skip sponsor/self-promo segments on VODs using the public SponsorBlock API (per-server, opt-in) |
+| `sfx <name\|list\|add\|del>` | `sound`, `board` | Soundboard: clips you attach (`sfx add horn` + an mp3/ogg) play through the same voice pipeline — instant when idle, otherwise inserted as the next song |
 
 **Utility** — `help`, `ping`, `myid`, `feedback <text>`, `stats`,
 `poll [duration] <question> [ | option | option …]`,
@@ -146,7 +152,25 @@ a restart)
 **Staff / owner** — `purge <1-100>` 🔒(Manage Messages), `rr [#channel]` 🔒(Manage Roles),
 `timeout <@member> <duration|off> [reason]` 🔒(Moderate Members),
 `modlog [#channel|off]` 🔒(Manage Server), `prefix [set <new>|reset]` 🔒(Manage Server),
+`welcome <show|channel|message|roles>` 🔒(Manage Server),
+`dj <show|role|channel>` 🔒(Manage Server),
+`watch <list|add <channel>|remove <channel>>` 🔒(Manage Server),
 `feedbacklist` 🔒(owner), `reboot` 🔒(owner), `update` 🔒(owner)
+
+**Join handling** — `welcome channel #general` greets new members (template with
+`{member} {guild} {count}`), `welcome roles @Member @Verified` auto-assigns
+them, and joins/leaves are logged to the `modlog` channel whenever one is set.
+Needs the SERVER MEMBERS privileged intent.
+
+**DJ + music channel** — `dj role @DJ` restricts queue control to that role (the
+song requester, staff with Manage Server, and the bot owner always pass);
+`dj channel #music` makes `play`, `playlist load` and `sfx` work only there.
+
+**Live announcements** — `watch add pokimane`, `watch add channel/UCxxxxxxxxx`
+or full URLs. The poller checks every 60 s and posts once per stream go-live.
+Twitch needs `TWITCH_CLIENT_ID`/`TWITCH_CLIENT_SECRET`; YouTube needs a
+`GOOGLE_API_KEY` (Data API v3) and a UC… channel id (the channel's About page
+shows a "Creator URL" you can paste).
 
 ## Configuration (`config.json`)
 
@@ -197,10 +221,13 @@ operation can never overwrite it:
 - `data/feedback.sqlite` — feedback records (falls back to `data/feedback.txt`
   when better-sqlite3 could not be installed; a text log is imported once and
   kept as `feedback.txt.imported`)
-- `data/reaction-roles.json` — menus the bot has posted (per message: channel, guild)
-- `data/guilds.json` — per-server overrides (prefix, 24/7, autoplay, vote skip, modlog)
+- `data/reaction-roles.json` — menus the bot has posted (per message: channel, guild, allowed role ids)
+- `data/guilds.json` — per-server overrides (prefix, 24/7, autoplay, vote skip, modlog, welcome, auto-role, dj, music channel, sponsorblock)
 - `data/playlists.json` — `playlist save` snapshots
 - `data/reminders.json` — pending `remind` entries with absolute timestamps
+- `data/watch.json` — live-stream follows and current online flags
+- `data/history.json` — play history and per-track play/skip counts
+- `data/sounds/` — soundboard clips (add with `sfx add`)
 
 A `feedback.txt` left in the repo root by an older install is moved into `data/`
 (and into the database when SQLite is active) automatically.

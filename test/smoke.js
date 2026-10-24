@@ -1095,6 +1095,181 @@ await check('voiceIdle disarms when 24/7 mode is on for the guild', () => {
     idle.disarm('g-247');
 });
 
+// --- v3.4: welcome renderer -------------------------------------------------------
+
+const lifecycle = require('../Event_listeners/guildLifecycle');
+
+await check('welcome template renders placeholders and survives junk', () => {
+    const member = {
+        toString: () => '<@99>',
+        guild: { name: 'Test Guild', memberCount: 1234 },
+    };
+    assert.equal(
+        lifecycle.renderWelcome('{member} joined {guild} as #{count}', member),
+        '<@99> joined Test Guild as #1234',
+    );
+    assert.ok(lifecycle.renderWelcome(null, member).includes('<@99>'), 'null template = default text');
+    assert.ok(lifecycle.renderWelcome('hi', member) === 'hi', 'no placeholders passes through');
+});
+
+await check('welcome auto-roles only return manageable roles', () => {
+    const roles = new Map([
+        ['r-hi', { id: 'r-hi', name: 'High', position: 50, managed: false }],
+        ['r-lo', { id: 'r-lo', name: 'Low', position: 1, managed: false }],
+        ['r-mg', { id: 'r-mg', name: 'Bot', position: 1, managed: true }],
+    ]);
+    const guild = { roles: { cache: { get: id => roles.get(id) ?? null } }, members: { me: { roles: { highest: { position: 10 } } } } };
+    const out = lifecycle.resolvableRoles(guild, ['r-hi', 'r-lo', 'r-mg', 'missing', null]);
+    assert.deepEqual(out.map(r => r.id), ['r-lo'], 'too-high, managed, and unknown ids drop out');
+});
+
+// --- v3.4: dj + music-channel gates -----------------------------------------------
+
+await check('djReply: no role set = open; role set gates by membership, requester, staff', () => {
+    const { djReply, playChannelReply } = guards;
+    const guildSettings = require('../lib/guildSettings');
+    const owner = String(process.env.OWNER);
+
+    guildSettings.patch('g-dj', {});
+    assert.equal(djReply({ id: 'g-dj' }, { id: 'u1' }, null), null, 'feature off passes everyone');
+
+    guildSettings.patch('g-dj', { djRoleId: 'r-dj' });
+    const guild = { id: 'g-dj', roles: { cache: { get: () => ({ name: 'DJ' }) } } };
+    const plain = { id: 'u1', permissions: { has: () => false }, roles: { cache: { has: () => false } } };
+    assert.match(djReply(guild, plain, null) ?? '', /DJ/, 'no role = refused with the role name');
+    assert.equal(djReply(guild, { ...plain, roles: { cache: { has: id => id === 'r-dj' } } }, null), null, 'role holder passes');
+    assert.equal(djReply(guild, plain, { songs: [{ user: { id: 'u1' } }] }), null, 'the song requester passes');
+    assert.equal(djReply(guild, { ...plain, permissions: { has: p => p === 'ManageGuild' } }, null), null, 'staff passes');
+    assert.equal(djReply(guild, { id: owner, permissions: { has: () => false }, roles: { cache: { has: () => false } } }, null), null, 'bot owner passes');
+
+    guildSettings.patch('g-ch', { musicChannelId: 'ch-music' });
+    assert.equal(playChannelReply({ id: 'g-ch' }, { id: 'ch-music' }), null, 'the music channel itself is allowed');
+    assert.match(playChannelReply({ id: 'g-ch' }, { id: 'ch-other' }) ?? '', /ch-music/, 'another channel is refused and told where');
+    guildSettings.reset('g-dj');
+    guildSettings.reset('g-ch');
+});
+
+// --- v3.4: search picker store -----------------------------------------------------
+
+const picker = require('../lib/searchPicker');
+
+await check('search picker stores results, expires, and peeks without leaking', () => {
+    picker.open('tok-1', {
+        songs: [{ name: 'a', url: 'https://example.invalid/a' }],
+        voiceChannelId: 'v', textChannelId: 't', guildId: 'g', userId: 'u',
+    });
+    assert.ok(picker.peek('tok-1'), 'a fresh picker is readable');
+    assert.ok(!picker.peek('tok-2'), 'unknown token peeks as null');
+
+    picker.pickers.get('tok-1').expires = Date.now() - 1;
+    assert.equal(picker.peek('tok-1'), null, 'an expired picker peeks as null');
+    assert.ok(!picker.pickers.has('tok-1'), 'peeking an expired picker deletes it');
+
+    const payload = picker.pickerPayload('test query', [{ name: 'Song [one]', url: 'https://example.invalid/1', duration: 65 }], 'tok');
+    assert.equal(payload.components.length, 1, 'one action row');
+    const menu = payload.components[0].toJSON().components[0];
+    assert.equal(menu.type, 3, 'a native select menu');
+    assert.equal(menu.custom_id, 'mb:pick:tok', 'the token rides in the customId');
+    assert.equal(menu.options[0].label, 'Song \\[one\\]', 'titles are markdown-escaped');
+});
+
+// --- v3.4: soundboard path safety --------------------------------------------------
+
+const board = require('../lib/soundboard');
+
+await check('soundboard validates names, extensions, and refuses traversal', () => {
+    assert.equal(board.soundPath('../../etc/passwd'), null, 'slashes are not name characters');
+    assert.equal(board.soundPath('a'.repeat(40)), null, '40 chars is one too many');
+    assert.ok(board.soundPath('cool-clip_1.mp3'), 'the extension is trimmed from the base name');
+
+    const bad = board.save('x', Buffer.from('hi'), { extension: '.exe' });
+    assert.ok(!bad.ok, 'a non-audio extension is refused');
+
+    const ok = board.save('Horn', Buffer.alloc(2048), { extension: '.mp3' });
+    assert.ok(ok.ok && ok.name === 'horn', 'names are lower-cased');
+    assert.ok(board.resolveClip('horn'), 'the clip resolves back');
+    assert.deepEqual(board.list().map(c => c.name), ['horn'], 'list shows exactly the one clip');
+
+    assert.ok(!board.save('a'.repeat(40), Buffer.alloc(10), { extension: '.mp3' }).ok, 'over-long names cannot be saved');
+    assert.ok(board.remove('horn').ok, 'delete works');
+    assert.ok(!board.remove('horn').ok, 'deleting twice reports the miss');
+});
+
+// --- v3.4: watch input parsing ------------------------------------------------------
+
+await check('watch parses twitch and youtube inputs into the right platform', () => {
+    const watchCmd = require('../commands/Staff_watch.js');
+    // parseInput is module-private; exercise it through the exported command's
+    // behaviour by re-requiring the source text via a fresh module instance.
+    const src = require('node:fs').readFileSync(
+        require.resolve('../commands/Staff_watch.js'), 'utf8');
+    assert.ok(src.includes('function parseInput'), 'the parser exists in the command module');
+    const extract = new Function(`${src.match(/function parseInput[\s\S]*?\n}/)[0]}; return parseInput;`);
+    const parseInput = extract();
+
+    assert.deepEqual(parseInput('Pokimane'), { platform: 'twitch', channel: 'pokimane' });
+    assert.deepEqual(parseInput('https://twitch.tv/shroud'), { platform: 'twitch', channel: 'shroud' });
+    assert.deepEqual(parseInput('https://www.youtube.com/channel/UCabc123def456hi'), { platform: 'youtube', channel: 'ucabc123def456hi' });
+    assert.deepEqual(parseInput('UCabc123def456hi'), { platform: 'youtube', channel: 'ucabc123def456hi' });
+    assert.equal(parseInput('@xqc').platform, 'youtube', 'a bare handle routes to youtube');
+    assert.equal(parseInput('@xqc').handle, true, 'handles are flagged for the id-guidance reply');
+    assert.equal(parseInput('not a channel!!'), null, 'junk is rejected');
+});
+
+// --- v3.4: play history -------------------------------------------------------------
+
+const playHistory = require('../lib/playHistory');
+
+await check('play history counts plays, skips and keeps the recent list capped', () => {
+    const song = { name: 'History Song', url: 'https://example.invalid/hist', duration: 100, source: 'youtube-dl' };
+    playHistory.recordPlay({ id: 'g-hist' }, song);
+    playHistory.recordAbandon({ id: 'g-hist' });    // stop mid-song = skip #1
+    playHistory.recordPlay({ id: 'g-hist' }, song);
+    playHistory.recordPlay({ id: 'g-hist' }, song); // replaced after ~0s = skip #2
+
+    const top = playHistory.top(5, 'plays');
+    const row = top.find(r => r.url === song.url);
+    assert.ok(row, 'the track is counted');
+    assert.equal(row.plays, 3, 'every play counted');
+    assert.equal(row.skips, 2, 'the abandoned and the replaced song both counted as skipped');
+
+    const recent = playHistory.recentPlays(5);
+    assert.equal(recent[0].name, 'History Song', 'most recent first');
+    assert.equal(recent.length, 3, 'one entry per play');
+
+    playHistory.recordPlay({ id: 'g-hist' }, { name: 'clip', url: 'file', source: 'file' });
+    assert.equal(playHistory.recentPlays(5)[0].name, 'History Song', 'soundboard clips are not music history');
+});
+
+// --- v3.4: reaction-role store v3 (role allow-list) ----------------------------------
+
+await check('reaction-roles store v3 records and returns the allowed role ids', () => {
+    store.record('menu-v3', { channelId: 'c', guildId: 'g', roleIds: ['1', '2'] });
+    assert.deepEqual(store.entry('menu-v3').roleIds, ['1', '2'], 'roleIds round-trip');
+    assert.equal(store.entry('menu-nope'), null, 'unknown messages have no entry');
+    const parsed = store.parse('{"menus":[{"messageId":"m","roleIds":["9"]}]}');
+    assert.deepEqual(parsed[0].roleIds, ['9'], 'the file format carries roleIds');
+    assert.equal(store.parse('{"menus":[{"messageId":"m"}]}')[0].roleIds, null, 'old entries load as null (fall back to config)');
+});
+
+// --- v3.4: guild settings v3 round-trip -----------------------------------------------
+
+await check('the new v3.4 guild settings round-trip through the store', () => {
+    const patchIn = {
+        welcomeChannelId: '123',
+        welcomeMessage: 'hello {member}',
+        autoRoleIds: ['1', '2'],
+        djRoleId: '9',
+        musicChannelId: '456',
+        sponsorBlock: true,
+    };
+    guildSettings.patch('g-v34', patchIn);
+    const got = guildSettings.get('g-v34');
+    for (const [k, v] of Object.entries(patchIn)) assert.deepEqual(got[k], v, `${k} survives the round trip`);
+    guildSettings.reset('g-v34');
+    assert.equal(guildSettings.get('g-v34').djRoleId, null, 'reset clears the new keys too');
+});
+
     // Windows refuses to delete a directory containing an open sqlite file.
     feedbackStore.close();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });

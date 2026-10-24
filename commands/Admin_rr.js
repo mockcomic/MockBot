@@ -80,18 +80,46 @@ module.exports = {
             .setColor(COLOR.accent)
             .setTitle('Pick your roles')
             .setDescription(
-                `React to this message to get or remove a role.\n\n${lines.join('\n')}\n\n` +
-                'Only this message assigns roles; reactions on other posts are ignored.',
+                `Pick below — or react — to get or remove a role.\n\n${lines.join('\n')}\n\n` +
+                'Only this message assigns roles; reactions and picks on other posts are ignored.',
             );
+
+        // Native multi-select alongside the reactions: same roles, same rules,
+        // but no custom-emoji fragility and it works on mobile keyboards.
+        // The menu's own row is kept separately so a missing emoji still
+        // leaves a usable select (max 25 rows).
+        const chosen = rr.roles
+            .map(entry => (entry.roleId && ctx.guild.roles.cache.get(entry.roleId))
+                ?? ctx.guild.roles.cache.find(r => r.name === entry.name))
+            .filter(Boolean)
+            .slice(0, 25);
 
         let sent;
         try {
-            sent = await target.send({ embeds: [embed] });
+            sent = await target.send({
+                embeds: [embed],
+                components: chosen.length ? [{
+                    type: 3,
+                    customId: 'mb:rr',
+                    placeholder: 'Choose your roles',
+                    min_values: 0,
+                    max_values: chosen.length,
+                    options: chosen.map(role => ({
+                        label: role.name.slice(0, 100),
+                        value: role.id,
+                        description: `roleId ${role.id}`.slice(0, 100),
+                    })),
+                }] : [],
+            });
         } catch (err) {
             return ctx.reply(`❌ Could not post in ${target}: ${err.message}`);
         }
 
-        store.record(sent.id, { channelId: target.id, guildId: ctx.guild.id });
+        store.record(sent.id, {
+            channelId: target.id,
+            guildId: ctx.guild.id,
+            roleIds: chosen.map(r => r.id),
+        });
 
         const failed = [];
         for (const entry of rr.roles) {

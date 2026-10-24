@@ -90,6 +90,14 @@ const SETTINGS_SCHEMA = [
         hint: 'Queue the YouTube radio mix when a queue runs dry. Per-guild override wins.',
     },
     {
+        path: 'music.sponsorBlockByDefault', label: 'SponsorBlock on by default', type: 'bool',
+        hint: 'Skip sponsor/self-promo segments on VODs. Per-guild `sponsorblock` override wins.',
+    },
+    {
+        path: 'music.soundboardEnabled', label: 'Soundboard enabled', type: 'bool',
+        hint: 'Master switch for `sfx`. Clips live in data/sounds; add them from Discord.',
+    },
+    {
         path: 'reactionRoles.enabled', label: 'Reaction roles system', type: 'bool',
         hint: 'Master switch for the emoji-to-role listener.',
     },
@@ -324,6 +332,26 @@ async function loadOverview() {
     var top = clear($('topOverall'));
     if (!st.usage.top.length) { top.appendChild(el('li', 'no commands used yet', 'muted')); }
     st.usage.top.forEach(function (row) { top.appendChild(el('li', row.name + ' — ' + row.count + '×')); });
+
+    var hist = (st.history || {});
+    var rec = clear($('recentPlayed'));
+    if (!hist.recent || !hist.recent.length) { rec.appendChild(el('li', 'nothing played yet', 'muted')); }
+    (hist.recent || []).forEach(function (r) {
+        var li = document.createElement('li');
+        if (r.url) {
+            var a = el('a', r.name); a.href = r.url; a.target = '_blank'; a.rel = 'noopener';
+            li.appendChild(a);
+        } else li.appendChild(document.createTextNode(r.name));
+        li.appendChild(el('span', ' — ' + r.guild + (r.by ? ' · ' + r.by : '') + ' · ' + fmtDate(r.ts), 'muted'));
+        rec.appendChild(li);
+    });
+    var mp = clear($('mostPlayed'));
+    if (!hist.mostPlayed || !hist.mostPlayed.length) { mp.appendChild(el('li', 'no plays counted yet', 'muted')); }
+    (hist.mostPlayed || []).forEach(function (row) { mp.appendChild(el('li', row.name + ' — ' + row.plays + '×')); });
+    var ms = clear($('mostSkipped'));
+    if (!hist.mostSkipped || !hist.mostSkipped.length) { ms.appendChild(el('li', 'nothing skipped yet', 'muted')); }
+    (hist.mostSkipped || []).forEach(function (row) { ms.appendChild(el('li', row.name + ' — skipped ' + row.skips + '× of ' + row.plays + ' plays')); });
+
     $('ownerWarn').style.display = st.owner.set ? 'none' : '';
     $('ownerWarn').textContent = 'OWNER is not set in .env — owner-only commands are unreachable and the portal is the only admin surface.';
 }
@@ -376,9 +404,17 @@ async function loadServers() {
     var gAuto = field('Autoplay override', 'g-autoplay', sel.settings.autoplay, 'text');
     var gVote = field('Vote-skip override (true/false)', 'g-voteskip', sel.settings.voteSkip, 'text');
     var gMod = field('Modlog channel ID', 'g-modlog', sel.settings.modlogChannelId, 'text');
+    var gWelcome = field('Welcome channel ID', 'g-welcome', sel.settings.welcomeChannelId, 'text');
+    var gWelcomeMsg = field('Welcome text ({member} {guild} {count})', 'g-welcome-msg', sel.settings.welcomeMessage, 'text');
+    var gAutoRoles = field('Auto-role IDs (comma-separated)', 'g-autoroles',
+        Array.isArray(sel.settings.autoRoleIds) ? sel.settings.autoRoleIds.join(',') : '', 'text');
+    var gDj = field('DJ role ID (blank = off)', 'g-dj', sel.settings.djRoleId, 'text');
+    var gMusicCh = field('Music channel ID (blank = any)', 'g-music-ch', sel.settings.musicChannelId, 'text');
+    var gSb = field('SponsorBlock override (true/false)', 'g-sb', sel.settings.sponsorBlock, 'text');
     var saveBtn = el('button', 'Save server settings', 'act');
     saveBtn.addEventListener('click', async function () {
         function tri(v) { v = (v || '').trim().toLowerCase(); return v === '' ? null : (v === 'true' || v === 'on' || v === '1' || v === 'yes'); }
+        function ids(v) { return (v || '').trim() ? (v || '').trim() : null; }
         await post('/api/guild/settings', {
             guildId: sel.id,
             patch: {
@@ -386,7 +422,13 @@ async function loadServers() {
                 twentyFourSeven: g247.checked,
                 autoplay: tri(gAuto.value),
                 voteSkip: tri(gVote.value),
-                modlogChannelId: (gMod.value || '').trim() ? (gMod.value || '').trim() : null,
+                modlogChannelId: ids(gMod.value),
+                welcomeChannelId: ids(gWelcome.value),
+                welcomeMessage: ids(gWelcomeMsg.value),
+                autoRoleIds: ids(gAutoRoles.value),
+                djRoleId: ids(gDj.value),
+                musicChannelId: ids(gMusicCh.value),
+                sponsorBlock: tri(gSb.value),
             },
         });
         loadServers();
@@ -452,6 +494,25 @@ async function loadServers() {
                 .then(loadServers).catch(function (e) { toast(e.message); });
         });
         mc.appendChild(volIn); mc.appendChild(volBtn);
+
+        // Full live queue: the playing row first, then up to 50 pending rows.
+        var ql = el('ol'); ql.style.marginTop = '8px';
+        (sel.music.queueList || []).forEach(function (row) {
+            var li = document.createElement('li');
+            var label = row.url ? document.createElement('a') : document.createElement('span');
+            if (row.url) { label.href = row.url; label.target = '_blank'; label.rel = 'noopener'; }
+            label.textContent = row.name;
+            li.appendChild(label);
+            var meta = ' — ' + (row.live ? 'LIVE' : (row.duration || '?'));
+            if (row.by) meta += ' · ' + row.by;
+            li.appendChild(el('span', meta, 'muted'));
+            if (row.pos === 1) li.style.fontWeight = 'bold';
+            ql.appendChild(li);
+        });
+        mc.appendChild(ql);
+        if (sel.music.queued > (sel.music.queueList || []).length - 1) {
+            mc.appendChild(el('li', '…and ' + (sel.music.queued - Math.max(0, (sel.music.queueList || []).length - 1)) + ' more beyond row 50', 'muted'));
+        }
     }
 }
 
@@ -518,6 +579,36 @@ async function loadSettings() {
         post('/api/settings', { path: 'reactionRoles.roles', value: ta.value }).then(loadSettings).catch(function (e) { toast(e.message); });
     });
     form.appendChild(rolesBtn);
+
+    form.appendChild(el('h3', 'Config backup'));
+    var expBtn = el('button', 'Export settings JSON', 'act');
+    expBtn.addEventListener('click', async function () {
+        var data2 = await get('/api/backup');
+        var blob = new Blob([JSON.stringify(data2, null, 2)], { type: 'application/json' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'mockbot-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+        a.click();
+        URL.revokeObjectURL(a.href);
+    });
+    form.appendChild(expBtn);
+    var fileIn = el('input'); fileIn.type = 'file'; fileIn.accept = '.json,application/json';
+    fileIn.style.display = 'none';
+    fileIn.addEventListener('change', async function () {
+        var f = fileIn.files && fileIn.files[0];
+        if (!f) return;
+        if (!confirm('Restore replaces the current per-server settings, playlists, overrides and watch list. Continue?')) return;
+        try {
+            var parsed = JSON.parse(await f.text());
+            var r = await post('/api/backup', parsed);
+            toast('restored: ' + ((r.restored || []).join(', ') || 'nothing'));
+        } catch (e) { toast(e.message); }
+    });
+    var impBtn = el('button', 'Import backup…', 'act sec');
+    impBtn.addEventListener('click', function () { fileIn.click(); });
+    form.appendChild(impBtn);
+    form.appendChild(fileIn);
+    form.appendChild(el('p', 'Restore writes the files; restart the bot so every store re-reads them.', 'muted'));
 
     var ov = clear($('overrides'));
     var keys = Object.keys(data.overrides);
@@ -590,6 +681,9 @@ function dashboardPage(csrf) {
 <p id="ownerWarn" class="badge off" style="display:none"></p>
 <section><h2>Status</h2><dl id="status"><dt>…</dt><dd class="muted">loading</dd></dl></section>
 <section><h2>Music</h2><ul id="music"><li class="muted">loading</li></ul></section>
+<section><h2>Recently played</h2><ol id="recentPlayed"><li class="muted">loading</li></ol></section>
+<section><h2>Most played</h2><ol id="mostPlayed"><li class="muted">loading</li></ol></section>
+<section><h2>Most skipped</h2><ol id="mostSkipped"><li class="muted">loading</li></ol></section>
 <section><h2>Most used commands (all servers)</h2><ol id="topOverall"><li class="muted">loading</li></ol></section>
 </div>
 <div id="tab-servers" style="display:none">
@@ -630,7 +724,7 @@ function dashboardPage(csrf) {
 }
 
 /** One snapshot of what the Discord-side bot knows. Never throws. */
-function buildStatus({ client, distube, commands, commandToggles, usage, session }) {
+function buildStatus({ client, distube, commands, commandToggles, usage, playHistory, session }) {
     const rawPing = Number(client?.ws?.ping);
     const snapshot = {
         version: (() => {
@@ -656,6 +750,11 @@ function buildStatus({ client, distube, commands, commandToggles, usage, session
         usage: {
             grandTotal: usage ? usage.grandTotal() : 0,
             top: usage ? usage.top(null, 15) : [],
+        },
+        history: {
+            recent: playHistory ? playHistory.recentPlays(15) : [],
+            mostPlayed: playHistory ? playHistory.top(10, 'plays') : [],
+            mostSkipped: playHistory ? playHistory.top(10, 'skips').filter(r => r.skips > 0) : [],
         },
         session: { actor: String(session?.actor ?? 'admin') },
         music: [],
@@ -686,6 +785,14 @@ function buildStatus({ client, distube, commands, commandToggles, usage, session
                 volume: Number.isFinite(queue.volume) ? queue.volume : null,
                 repeatMode: REPEAT_LABELS[queue.repeatMode] ?? 'off',
                 queued: Math.max(0, (queue.songs?.length ?? 1) - 1),
+                queueList: (queue.songs ?? []).slice(0, 50).map((s, i) => ({
+                    pos: i + 1,
+                    name: String(s?.name ?? 'unknown').slice(0, 120),
+                    url: typeof s?.url === 'string' && /^https?:/i.test(s.url) ? s.url : null,
+                    duration: s?.formattedDuration ?? null,
+                    live: Boolean(s?.isLive),
+                    by: s?.user?.tag ?? s?.user?.id ?? null,
+                })),
             });
         } catch {
             // A queue torn down mid-snapshot skips this guild, not the endpoint.
@@ -761,6 +868,9 @@ async function startPortal(options = {}) {
     const runtimeConfig = deps.runtimeConfig ?? require('../lib/runtimeConfig');
     const usage = deps.usage ?? require('../lib/usage');
     const auditLog = deps.auditLog ?? require('../lib/auditLog');
+    const playHistory = deps.playHistory ?? require('../lib/playHistory');
+    const liveWatch = deps.liveWatch ?? require('../lib/liveWatch');
+    const playlistsStore = deps.playlistsStore ?? require('../lib/playlistsStore');
 
     const user = env.WEB_USER;
     const pass = env.WEB_PASS;
@@ -1100,7 +1210,7 @@ async function startPortal(options = {}) {
             }
 
             if (method === 'GET' && pathname === '/api/status') {
-                return json(res, 200, buildStatus({ ...options, commandToggles, usage, session }));
+                return json(res, 200, buildStatus({ ...options, commandToggles, usage, playHistory, session }));
             }
 
             if (method === 'GET' && pathname === '/api/feedback') {
@@ -1167,6 +1277,14 @@ async function startPortal(options = {}) {
                                 volume: Number.isFinite(queue.volume) ? queue.volume : null,
                                 repeatMode: REPEAT_LABELS[queue.repeatMode] ?? 'off',
                                 queued: Math.max(0, (queue.songs?.length ?? 1) - 1),
+                                queueList: (queue.songs ?? []).slice(0, 50).map((s, i) => ({
+                                    pos: i + 1,
+                                    name: String(s?.name ?? 'unknown').slice(0, 120),
+                                    url: typeof s?.url === 'string' && /^https?:/i.test(s.url) ? s.url : null,
+                                    duration: s?.formattedDuration ?? null,
+                                    live: Boolean(s?.isLive),
+                                    by: s?.user?.tag ?? s?.user?.id ?? null,
+                                })),
                             };
                         }
                     } catch { /* queue torn down mid-snapshot */ }
@@ -1200,7 +1318,11 @@ async function startPortal(options = {}) {
                 const gid = knownGuild(body.guildId);
                 if (!gid) return fail(res, 400, 'unknown guild id');
                 const patchIn = body.patch ?? {};
-                const allowed = ['prefix', 'twentyFourSeven', 'autoplay', 'voteSkip', 'modlogChannelId'];
+                const allowed = [
+                    'prefix', 'twentyFourSeven', 'autoplay', 'voteSkip', 'modlogChannelId',
+                    'welcomeChannelId', 'welcomeMessage', 'autoRoleIds',
+                    'djRoleId', 'musicChannelId', 'sponsorBlock',
+                ];
                 const patch = {};
                 for (const key of allowed) {
                     if (!(key in patchIn)) continue;
@@ -1208,9 +1330,27 @@ async function startPortal(options = {}) {
                     if (key === 'prefix') {
                         v = v === null || v === '' ? null : String(v).trim().slice(0, 5);
                         if (v && /[\r\n<]/.test(v)) return fail(res, 400, 'prefix contains forbidden characters');
-                    } else if (key === 'modlogChannelId') {
+                    } else if (key === 'modlogChannelId' || key === 'welcomeChannelId' || key === 'musicChannelId') {
                         v = v === null || v === '' ? null : String(v).trim();
-                        if (v && !/^\d{5,25}$/.test(v)) return fail(res, 400, 'modlog channel id must be a snowflake');
+                        if (v && !/^\d{5,25}$/.test(v)) return fail(res, 400, `${key} must be a channel id`);
+                    } else if (key === 'djRoleId') {
+                        v = v === null || v === '' ? null : String(v).trim();
+                        if (v && !/^\d{5,25}$/.test(v)) return fail(res, 400, 'djRoleId must be a role id');
+                    } else if (key === 'welcomeMessage') {
+                        v = v === null || v === '' ? null : String(v).slice(0, 400);
+                        if (v && /[\r<@]|https?:/i.test(v)) {
+                            return fail(res, 400, 'welcome text must be plain (no <, @, or links; {member} {guild} {count} allowed)');
+                        }
+                    } else if (key === 'autoRoleIds') {
+                        if (v === null || v === '' || (Array.isArray(v) && !v.length)) v = null;
+                        else {
+                            const ids = (Array.isArray(v) ? v : String(v).split(/[,\s]+/)).map(String).filter(Boolean).slice(0, 5);
+                            if (!ids.length) v = null;
+                            else if (!ids.every(s => /^\d{5,25}$/.test(s))) return fail(res, 400, 'autoRoleIds must be role ids');
+                            else v = ids;
+                        }
+                    } else if (key === 'sponsorBlock') {
+                        v = v === null ? null : Boolean(v);
                     } else {
                         v = v === null ? null : Boolean(v);
                     }
@@ -1283,6 +1423,71 @@ async function startPortal(options = {}) {
                 }
                 await audit(session, 'music', `${op} guild ${gid}${op === 'volume' ? ` -> ${body.value}` : ''}`);
                 return json(res, 200, { ok: true, message: op });
+            }
+
+            if (method === 'GET' && pathname === '/api/backup') {
+                // Everything the portal can restore, as one downloadable JSON:
+                // the runtime stores only (config.json ships with the repo).
+                const files = {
+                    'guilds.json': guildSettings.FILE,
+                    'playlists.json': playlistsStore.FILE,
+                    'runtime-config.json': runtimeConfig.FILE,
+                    'watch.json': liveWatch.FILE,
+                };
+                const stores = {};
+                for (const [name, file] of Object.entries(files)) {
+                    try { stores[name] = JSON.parse(fs.readFileSync(file, 'utf8')); }
+                    catch { stores[name] = null; } // missing/corrupt = not included
+                }
+                return json(res, 200, { ok: true, exportedAt: Date.now(), stores });
+            }
+
+            if (method === 'POST' && pathname === '/api/backup') {
+                let body;
+                try {
+                    const raw = await readBody(req, 4 * 1024 * 1024); // a full playlist library is big
+                    body = JSON.parse(raw || '{}');
+                } catch (err) {
+                    return fail(res, err.statusCode ?? 400, err.message ?? 'bad request');
+                }
+                const stores = body.stores;
+                if (!stores || typeof stores !== 'object' || Array.isArray(stores)) return fail(res, 400, 'body.stores must be an object');
+                const allowed = {
+                    'guilds.json': guildSettings.FILE,
+                    'playlists.json': playlistsStore.FILE,
+                    'runtime-config.json': runtimeConfig.FILE,
+                    'watch.json': liveWatch.FILE,
+                };
+                // Validate the shape BEFORE touching disk: a bad bundle must
+                // not leave half the stores replaced.
+                for (const [name, value] of Object.entries(stores)) {
+                    if (!(name in allowed)) continue; // unknown keys are ignored, not written
+                    if (value !== null && (typeof value !== 'object' || Array.isArray(value))) {
+                        return fail(res, 400, `${name} must be an object or null`);
+                    }
+                    if (name === 'guilds.json' && value && typeof value.guilds !== 'object') {
+                        return fail(res, 400, 'guilds.json must carry a "guilds" object');
+                    }
+                }
+                const restored = [];
+                for (const [name, value] of Object.entries(stores)) {
+                    const file = allowed[name];
+                    if (!file || value === null) continue;
+                    try {
+                        fs.mkdirSync(path.dirname(file), { recursive: true });
+                        const tmp = `${file}.tmp`;
+                        fs.writeFileSync(tmp, JSON.stringify(value, null, 4), 'utf8');
+                        fs.renameSync(tmp, file);
+                        restored.push(name);
+                    } catch (err) {
+                        return fail(res, 500, `restored ${restored.join(', ') || 'nothing'} before failing on ${name}: ${err.message}`);
+                    }
+                }
+                // Re-read the stores we just overwrote so the live process
+                // matches the disk (the stores cache their contents at first use).
+                try { guildSettings.load(); } catch {}
+                await audit(session, 'backup', `restored ${restored.join(', ') || 'nothing'}`);
+                return json(res, 200, { ok: true, restored, note: 'restart the bot so every store re-reads the restored files' });
             }
 
             return fail(res, 404, 'not found');

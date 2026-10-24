@@ -7,7 +7,9 @@
     "music": {
         "leaveOnEmptyAfterSeconds": 90,
         "voteSkipEnabled": true,
-        "autoplayByDefault": false
+        "autoplayByDefault": false,
+        "sponsorBlockByDefault": false,
+        "soundboardEnabled": true
     },
     "reactionRoles": {
         "enabled": true,

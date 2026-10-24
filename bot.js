@@ -15,9 +15,13 @@ const cooldowns = require('./lib/cooldowns');
 const components = require('./lib/components');
 const reminders = require('./lib/reminders');
 require('./lib/musicUi'); // registers the mb: control handlers with components.js
+require('./lib/searchPicker'); // registers the mb:pick handler (play result picker)
 const setupMusicEvents = require('./Event_listeners/musicBot');
 const setupReactionRoles = require('./Event_listeners/reactionRoles');
+const setupGuildLifecycle = require('./Event_listeners/guildLifecycle');
 const setupVoiceIdle = require('./Event_listeners/voiceIdle');
+const setupSponsorBlock = require('./lib/sponsorBlock');
+const liveWatch = require('./lib/liveWatch');
 const { startPortal } = require('./web/portal');
 
 const REQUIRED_NODE = 22;
@@ -50,6 +54,7 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent, // privileged: enable it in the Developer Portal
+        GatewayIntentBits.GuildMembers,   // privileged: welcome/auto-role/modlog joins
         GatewayIntentBits.GuildVoiceStates,
     ],
     partials: [Partials.Message, Partials.Channel, Partials.Reaction],
@@ -105,6 +110,8 @@ async function resyncSlashCommands() {
 
 setupMusicEvents(distube, { config });
 setupReactionRoles(client, config);
+setupGuildLifecycle(client);
+setupSponsorBlock(distube, { config }).setup();
 const idleWatcher = setupVoiceIdle(client, { distube, config });
 
 client.once(Events.ClientReady, async readyClient => {
@@ -137,6 +144,9 @@ client.once(Events.ClientReady, async readyClient => {
     // Deliver reminders that came due while the bot was down and arm the timer.
     reminders.start(readyClient);
 
+    // Live-stream announcements poller (no-op until `watch add` fills the list).
+    liveWatch.start({ client: readyClient });
+
     // Optional admin page (WEB_USER/WEB_PASS). It must never be the
     // reason the bot is dead, so a failed bind only costs a log line.
     try {
@@ -154,8 +164,15 @@ client.on(Events.MessageCreate, async message => {
     if (!message.content.startsWith(prefix)) return;
 
     const parts = message.content.slice(prefix.length).trim().split(/\s+/);
-    const name = parts.shift()?.toLowerCase();
+    let name = parts.shift()?.toLowerCase();
     if (!name) return;
+
+    // Trailing-bang opt-out: `!play! data` runs play with `!data`, which
+    // play() reads as "search and auto-pick, no picker menu".
+    if (name.endsWith('!')) {
+        name = name.slice(0, -1);
+        parts.unshift(`!${parts.join(' ')}`.trimEnd());
+    }
 
     const cmd = getCommand(name);
     if (!cmd) return;
@@ -169,8 +186,9 @@ client.on(Events.MessageCreate, async message => {
 });
 
 client.on(Events.InteractionCreate, async interaction => {
-    // Buttons (player controls, queue paging) go through the shared dispatcher.
-    if (interaction.isButton()) {
+    // Buttons (player controls, queue paging) and select menus (the play
+    // result picker) go through the shared dispatcher.
+    if (interaction.isButton() || interaction.isStringSelectMenu()) {
         await components.dispatch(interaction, { client, distube, config });
         return;
     }

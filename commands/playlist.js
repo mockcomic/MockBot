@@ -3,7 +3,7 @@ const { Song, Playlist } = require('distube');
 const store = require('../lib/playlistsStore');
 const { YtDlpPluginPatched } = require('../lib/YtDlpPluginPatched');
 const { videoIdOf } = require('../lib/autoplay');
-const { requireQueue, isBlocked } = require('../lib/musicGuards');
+const { requireQueue, isBlocked, playChannelReply } = require('../lib/musicGuards');
 const { mdTitle } = require('../lib/musicFormat');
 const { clip } = require('../lib/respond');
 
@@ -100,6 +100,10 @@ module.exports = {
                 const voiceChannel = ctx.member?.voice?.channel
                     ?? (await ctx.guild.members.fetch(ctx.user.id).catch(() => null))?.voice?.channel;
                 if (!voiceChannel) return ctx.reply('Join a voice channel first, then try again.');
+
+                // Loading a list starts playback, so the music-channel rule applies.
+                const wrongChannel = playChannelReply(ctx.guild, ctx.channel);
+                if (wrongChannel) return ctx.reply(wrongChannel);
 
                 const plugin = ctx.distube.plugins.find(p => p instanceof YtDlpPluginPatched);
                 if (!plugin) return ctx.reply('❌ The yt-dlp plugin is not loaded, so saved playlists cannot play.');

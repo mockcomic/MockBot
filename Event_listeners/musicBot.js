@@ -3,6 +3,7 @@ const { COLOR, songLink, statusLine } = require('../lib/musicFormat');
 const { clip } = require('../lib/respond');
 const { controlRow } = require('../lib/musicUi');
 const autoplay = require('../lib/autoplay');
+const history = require('../lib/playHistory');
 const guildSettings = require('../lib/guildSettings');
 
 function send(queue, payload) {
@@ -26,6 +27,7 @@ module.exports = function setupMusicEvents(distube, deps = {}) {
     distube
         .on('playSong', (queue, song) => {
             autoplay.recordPlay(queue.id, song);
+            history.recordPlay(queue, song);
             send(queue, {
                 embeds: [
                     new EmbedBuilder()
@@ -39,17 +41,25 @@ module.exports = function setupMusicEvents(distube, deps = {}) {
                 components: [controlRow(queue)],
             });
         })
-        .on('addSong', (queue, song) =>
+        .on('addSong', (queue, song) => {
+            // Same URL already pending? Say so and give its row, so a repeated
+            // play does not look like it vanished into the list.
+            const dupIndex = queue.songs.findIndex(
+                (s, i) => i > 0 && s.url && song.url && s.url === song.url,
+            );
             send(queue, {
                 embeds: [
                     new EmbedBuilder()
                         .setColor(COLOR.add)
                         .setDescription(
-                            `🎶 Added ${songLink(song)} — \`${song.formattedDuration}\` to the queue by ${song.user ?? 'Unknown'}`,
+                            `🎶 Added ${songLink(song)} — \`${song.formattedDuration}\` to the queue by ${song.user ?? 'Unknown'}` +
+                            (dupIndex > 0
+                                ? `\n⚠️ It was already queued at position ${dupIndex + 1}, so this copy sits at position ${queue.songs.length}.`
+                                : ''),
                         ),
                 ],
-            }),
-        )
+            });
+        })
         .on('addList', (queue, playlist) =>
             send(queue, {
                 embeds: [
@@ -105,21 +115,23 @@ module.exports = function setupMusicEvents(distube, deps = {}) {
             // is what actually disconnects.
             await queue.stop().catch(() => {});
         })
+        .on('finishSong', (queue, song) => history.recordFinish(queue, song))
         .on('noRelated', (queue, error) =>
             // Signature is (queue, error) — the second argument is a DisTubeError.
             send(queue, `❌ No related song could be found: ${error?.message ?? 'unknown reason'}`),
         )
         // Note: DisTube v5 has no `empty` event and no leaveOnEmpty option, so
         // "the room emptied out" is handled by Event_listeners/voiceIdle.js.
-        .on('disconnect', queue =>
+        .on('disconnect', queue => {
+            history.recordAbandon(queue); // stop() mid-song = skipped
             send(queue, {
                 embeds: [
                     new EmbedBuilder()
                         .setColor(COLOR.info)
                         .setDescription('👋 Disconnected from the voice channel.'),
                 ],
-            }),
-        )
+            });
+        })
         .on('error', (error, queue, song) => {
             console.error('[distube]', error);
             send(

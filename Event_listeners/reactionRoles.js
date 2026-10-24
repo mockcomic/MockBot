@@ -1,5 +1,6 @@
-const { Events } = require('discord.js');
+const { Events, MessageFlags } = require('discord.js');
 const store = require('../lib/reactionRolesStore');
+const { register } = require('../lib/components');
 
 /**
  * Reaction-role handling, driven by config.reactionRoles.
@@ -101,6 +102,55 @@ module.exports = function setupReactionRoles(client, config) {
 
     client.on(Events.MessageReactionAdd, (reaction, user) => handle(reaction, user, true));
     client.on(Events.MessageReactionRemove, (reaction, user) => handle(reaction, user, false));
+
+    /**
+     * The native multi-select on the menu (`mb:rr`), via the shared component
+     * dispatcher. The submitted selection is the SET of menu roles the user
+     * wants: pick a row to take it, unpick to drop it. Values are only
+     * honoured when they are in the menu's recorded roleIds (menus posted
+     * before v3.4 fall back to the live config table), so a forged payload
+     * cannot request a role the menu never offered.
+     */
+    register('rr', async interaction => {
+        const rr = config?.reactionRoles;
+        if (!rr?.enabled) return interaction.message.edit({ components: [] }).catch(() => {});
+
+        const menu = store.entry(interaction.message.id);
+        if (!menu) {
+            return interaction.update({ components: [] }).catch(() => {});
+        }
+
+        const allowedIds = menu.roleIds
+            ?? rr.roles.map(e => (e.roleId && interaction.guild.roles.cache.get(e.roleId)?.id)
+                ?? interaction.guild.roles.cache.find(r => r.name === e.name)?.id)
+                .filter(Boolean);
+        const allowed = new Set(allowedIds.map(String));
+
+        const chosen = new Set(
+            (interaction.values ?? []).filter(v => allowed.has(String(v))).map(String),
+        );
+
+        const me = interaction.guild.members.me;
+        const member = interaction.member;
+        const toAdd = [];
+        const toRemove = [];
+        for (const id of allowed) {
+            const role = interaction.guild.roles.cache.get(id);
+            if (!role || role.managed) continue;
+            if (me && me.roles.highest.position <= role.position) continue;
+            if (chosen.has(id)) toAdd.push(role);
+            else toRemove.push(role);
+        }
+
+        const reason = 'MockBot role-select menu';
+        const owned = new Set(member.roles.cache.keys());
+        const add = toAdd.filter(r => !owned.has(r.id));
+        const remove = toRemove.filter(r => owned.has(r.id));
+        if (add.length) await member.roles.add(add, reason);
+        if (remove.length) await member.roles.remove(remove, reason);
+
+        return interaction.reply({ content: '✅ Roles updated.', flags: MessageFlags.Ephemeral });
+    });
 };
 
 module.exports.emojiKeys = emojiKeys;

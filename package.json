@@ -1,6 +1,6 @@
 {
   "name": "mockbot",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "description": "discord utility & music bot",
   "main": "bot.js",
   "engines": {
