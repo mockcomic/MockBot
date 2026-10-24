@@ -9,10 +9,13 @@ module.exports = {
     async execute(ctx) {
         const sent = await ctx.reply('🏓 Pinging…');
         const roundtrip = Date.now() - sent.createdTimestamp;
-        const ws = Math.round(ctx.client.ws.ping);
-        const text = `🏓 Pong! Roundtrip: **${roundtrip}ms** | WebSocket: **${ws}ms**`;
+        const ws = Number(ctx.client.ws.ping);
+        // ws.ping is -1 until the first heartbeat ACK arrives.
+        const wsText = Number.isFinite(ws) && ws >= 0 ? `**${Math.round(ws)}ms**` : 'n/a';
+        const text = `🏓 Pong! Roundtrip: **${roundtrip}ms** | WebSocket: ${wsText}`;
 
-        if (ctx.isSlash) return ctx.interaction.editReply(text);
-        return sent.edit(text);
+        // ctx.editReply handles both styles (message.edit vs interaction.editReply),
+        // so commands no longer reach into ctx.interaction.
+        return ctx.editReply(text);
     },
 };

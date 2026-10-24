@@ -1,17 +1,40 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, Events } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, Events, MessageFlags } = require('discord.js');
 const { DisTube } = require('distube');
 const { YtDlpPluginPatched } = require('./lib/YtDlpPluginPatched');
 const config = require('./config.json');
 const { loadCommands } = require('./commands_Handler');
 const Context = require('./lib/Context');
+const { canRun } = require('./lib/access');
+const { clip } = require('./lib/respond');
 const setupMusicEvents = require('./Event_listeners/musicBot');
 const setupReactionRoles = require('./Event_listeners/reactionRoles');
+const setupVoiceIdle = require('./Event_listeners/voiceIdle');
+
+const REQUIRED_NODE = 22;
 
 if (!process.env.TOKEN) {
     console.error('[boot] TOKEN is missing. Create a .env file in the project root (see .env.example).');
     process.exit(1);
 }
+
+// DisTube 5 declares engines.node >= 22.12; say so plainly instead of failing
+// somewhere inside its module later on.
+const nodeMajor = Number.parseInt(process.versions.node, 10);
+if (nodeMajor < REQUIRED_NODE) {
+    console.warn(
+        `[boot] Node ${process.versions.node} is older than the ${REQUIRED_NODE}.12 the installed DisTube requires. ` +
+        'Music playback may fail; upgrade Node before reporting music bugs.',
+    );
+}
+
+// A stray rejection would otherwise take the whole bot down on an unattended machine.
+process.on('unhandledRejection', reason => {
+    console.error('[unhandledRejection]', reason instanceof Error ? reason : new Error(String(reason)));
+});
+process.on('uncaughtException', err => {
+    console.error('[uncaughtException]', err);
+});
 
 const client = new Client({
     intents: [
@@ -21,7 +44,13 @@ const client = new Client({
         GatewayIntentBits.GuildVoiceStates,
     ],
     partials: [Partials.Message, Partials.Channel, Partials.Reaction],
+    // Song titles, yt-dlp stderr and stored feedback are all remote text: never
+    // let it ping @everyone or a role on our behalf.
+    allowedMentions: { parse: ['users'], repliedUser: true },
 });
+
+client.on(Events.Error, err => console.error('[client]', err));
+client.on(Events.Warn, info => console.warn('[client]', info));
 
 let ffmpegPath;
 try {
@@ -35,6 +64,8 @@ const distube = new DisTube(client, {
     emitNewSongOnly: true,
     emitAddSongWhenCreatingQueue: false,
     emitAddListWhenCreatingQueue: false,
+    // /play from a different voice channel should follow the person who asked.
+    joinNewVoiceChannel: true,
     ffmpeg: { path: ffmpegPath },
 });
 
@@ -42,6 +73,7 @@ const { commands, get: getCommand } = loadCommands();
 
 setupMusicEvents(distube);
 setupReactionRoles(client, config);
+setupVoiceIdle(client, { distube, config });
 
 client.once(Events.ClientReady, async readyClient => {
     console.log(`Logged in as ${readyClient.user.tag}`);
@@ -50,12 +82,26 @@ client.once(Events.ClientReady, async readyClient => {
     const body = [...commands.values()]
         .filter(cmd => cmd.data)
         .map(cmd => cmd.data.toJSON());
-    for (const guild of readyClient.guilds.cache.values()) {
-        guild.commands.set(body).catch(err =>
-            console.error(`[slash] Failed to register in ${guild.name}: ${err.message}`),
-        );
+
+    const results = await Promise.allSettled(
+        [...readyClient.guilds.cache.values()].map(guild =>
+            guild.commands.set(body).catch(err => {
+                console.error(`[slash] Failed to register in ${guild.name}: ${err.message}`);
+                throw err;
+            }),
+        ),
+    );
+
+    const failed = results.filter(r => r.status === 'rejected').length;
+    const total = results.length;
+    console.log(
+        `Registered ${body.length} slash commands in ${total - failed}/${total} guild(s)` +
+        (failed ? ` — ${failed} failed, see above.` : '.'),
+    );
+
+    if (!process.env.OWNER) {
+        console.warn('[boot] OWNER is not set, so purge/rr/reboot/update are unreachable.');
     }
-    console.log(`Registered ${body.length} slash commands.`);
 });
 
 client.on(Events.MessageCreate, async message => {
@@ -85,10 +131,15 @@ client.on(Events.InteractionCreate, async interaction => {
     if (!cmd) return;
 
     if (!interaction.guild) {
-        return interaction.reply('MockBot commands only work in a server.');
+        return interaction.reply({
+            content: 'MockBot commands only work in a server.',
+            flags: MessageFlags.Ephemeral,
+        });
     }
 
     // Map slash options onto the same flat args array prefix commands use.
+    // Every command here takes at most one option, so order is unambiguous;
+    // commands that need more should read ctx.option(name) instead.
     const args = interaction.options.data.map(opt => String(opt.value));
 
     await runCommand(cmd, new Context({
@@ -100,14 +151,16 @@ client.on(Events.InteractionCreate, async interaction => {
 
 async function runCommand(cmd, ctx) {
     try {
-        if (cmd.ownerOnly && ctx.user.id !== process.env.OWNER) {
-            return ctx.reply('⛔ Access denied — owner only.');
+        const access = await canRun(cmd, ctx);
+        if (!access.ok) {
+            return ctx.reply(access.reason, { ephemeral: true });
         }
         await cmd.execute(ctx);
     } catch (err) {
         console.error(`[command:${cmd.name}]`, err);
         try {
-            await ctx.reply(`❌ Something went wrong: ${err.message}`);
+            // err.message can carry remote text and any length, so cap it.
+            await ctx.reply(`❌ Something went wrong: ${clip(err?.message ?? String(err), 800)}`);
         } catch {
             /* interaction may already be gone */
         }

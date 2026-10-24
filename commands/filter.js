@@ -1,7 +1,17 @@
 const { SlashCommandBuilder } = require('discord.js');
 const { defaultFilters } = require('distube');
+const { requireQueue, isBlocked } = require('../lib/musicGuards');
+const { fenced } = require('../lib/respond');
 
 const FILTER_NAMES = Object.keys(defaultFilters);
+
+// Discord allows at most 25 choices per option; two are reserved for clear/list.
+const CHOICE_LIMIT = 23;
+const CHOICES = [
+    { name: 'clear (remove all filters)', value: 'clear' },
+    { name: 'list (show filters)', value: 'list' },
+    ...FILTER_NAMES.slice(0, CHOICE_LIMIT).map(name => ({ name, value: name })),
+];
 
 module.exports = {
     name: 'filter',
@@ -15,22 +25,22 @@ module.exports = {
                 .setName('name')
                 .setDescription('Filter to toggle, or "clear"/"list"')
                 .setRequired(false)
-                .addChoices(
-                    { name: 'clear (remove all filters)', value: 'clear' },
-                    { name: 'list (show filters)', value: 'list' },
-                    ...FILTER_NAMES.slice(0, 23).map(name => ({ name, value: name })),
-                ),
+                .addChoices(...CHOICES),
         ),
 
     async execute(ctx) {
-        const queue = ctx.distube.getQueue(ctx.guild);
-        if (!queue) return ctx.reply('Not playing music!');
+        const guard = await requireQueue(ctx);
+        if (isBlocked(guard)) return ctx.reply(guard.reply);
+        const { queue } = guard;
 
         const name = String(ctx.args[0] ?? 'list').toLowerCase();
 
         if (name === 'list') {
             const enabled = queue.filters.names.join(', ') || 'Off';
-            return ctx.reply(`Available filters: ${FILTER_NAMES.join(', ')}\nCurrently enabled: **${enabled}**`);
+            const shown = FILTER_NAMES.slice(0, CHOICE_LIMIT);
+            const hidden = FILTER_NAMES.length - shown.length;
+            const note = hidden > 0 ? `\n\n(${hidden} more only reachable as a prefix command)` : '';
+            return ctx.reply(`Currently enabled: **${enabled}**\n\n${fenced(shown.join('\n'), { title: 'Filters' })}${note}`);
         }
 
         if (name === 'clear') {

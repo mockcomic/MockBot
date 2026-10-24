@@ -1,4 +1,5 @@
 const { SlashCommandBuilder } = require('discord.js');
+const { requireQueue, isBlocked } = require('../lib/musicGuards');
 
 module.exports = {
     name: 'stop',
@@ -7,10 +8,10 @@ module.exports = {
     data: new SlashCommandBuilder().setName('stop').setDescription('Stop the music and clear the queue'),
 
     async execute(ctx) {
-        const queue = ctx.distube.getQueue(ctx.guild);
-        if (!queue) return ctx.reply('Not playing music!');
+        const guard = await requireQueue(ctx);
+        if (isBlocked(guard)) return ctx.reply(guard.reply);
 
-        await queue.stop();
+        await guard.queue.stop();
         return ctx.reply('⏹️ Stopped the music!');
     },
 };

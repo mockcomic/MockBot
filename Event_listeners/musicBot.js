@@ -1,18 +1,6 @@
 const { EmbedBuilder } = require('discord.js');
-
-const COLOR = {
-    play: 0x57f287,
-    add: 0x3498db,
-    list: 0x3498db,
-    info: 0xf1c40f,
-    error: 0xed4245,
-};
-
-function status(queue) {
-    const loop = queue.repeatMode ? (queue.repeatMode === 2 ? 'All Queue' : 'This Song') : 'Off';
-    const filters = queue.filters?.names?.join(', ') || 'Off';
-    return `Volume: \`${queue.volume}%\` | Filter: \`${filters}\` | Loop: \`${loop}\` | Autoplay: \`${queue.autoplay ? 'On' : 'Off'}\``;
-}
+const { COLOR, songLink, statusLine } = require('../lib/musicFormat');
+const { clip } = require('../lib/respond');
 
 function send(queue, payload) {
     queue.textChannel?.send(payload).catch(() => {});
@@ -31,8 +19,8 @@ module.exports = function setupMusicEvents(distube) {
                     new EmbedBuilder()
                         .setColor(COLOR.play)
                         .setDescription(
-                            `▶️ Playing [${song.name}](${song.url}) — \`${song.formattedDuration}\`\n` +
-                            `Requested by: ${song.user ?? 'Unknown'}\n${status(queue)}`,
+                            `▶️ Playing ${songLink(song)} — \`${song.formattedDuration}\`\n` +
+                            `Requested by: ${song.user ?? 'Unknown'}\n${statusLine(queue)}`,
                         )
                         .setThumbnail(song.thumbnail ?? null),
                 ],
@@ -44,7 +32,7 @@ module.exports = function setupMusicEvents(distube) {
                     new EmbedBuilder()
                         .setColor(COLOR.add)
                         .setDescription(
-                            `🎶 Added [${song.name}](${song.url}) — \`${song.formattedDuration}\` to the queue by ${song.user ?? 'Unknown'}`,
+                            `🎶 Added ${songLink(song)} — \`${song.formattedDuration}\` to the queue by ${song.user ?? 'Unknown'}`,
                         ),
                 ],
             }),
@@ -55,7 +43,8 @@ module.exports = function setupMusicEvents(distube) {
                     new EmbedBuilder()
                         .setColor(COLOR.list)
                         .setDescription(
-                            `📄 Added \`${playlist.name}\` playlist (${playlist.songs.length} songs) to queue\n${status(queue)}`,
+                            `📄 Added \`${clip(playlist.name ?? 'playlist', 200)}\` playlist ` +
+                            `(${playlist.songs.length} songs) to queue\n${statusLine(queue)}`,
                         ),
                 ],
             }),
@@ -68,11 +57,16 @@ module.exports = function setupMusicEvents(distube) {
                         .setDescription('⏹️ Queue finished — leaving the voice channel.'),
                 ],
             });
+            // DisTube removes the queue on its own but stays connected; stop()
+            // is what actually disconnects.
             queue.stop().catch(() => {});
         })
         .on('noRelated', (queue, error) =>
-            send(queue, `❌ No related song could be found: ${error.message}`),
+            // Signature is (queue, error) — the second argument is a DisTubeError.
+            send(queue, `❌ No related song could be found: ${error?.message ?? 'unknown reason'}`),
         )
+        // Note: DisTube v5 has no `empty` event and no leaveOnEmpty option, so
+        // "the room emptied out" is handled by Event_listeners/voiceIdle.js.
         .on('disconnect', queue =>
             send(queue, {
                 embeds: [
@@ -86,7 +80,8 @@ module.exports = function setupMusicEvents(distube) {
             console.error('[distube]', error);
             send(
                 queue,
-                `❌ An error occurred${song ? ` while playing \`${song.name}\`` : ''}: ${error.message}`,
+                `❌ An error occurred${song ? ` while playing \`${clip(song.name, 120)}\`` : ''}: ` +
+                `${clip(error?.message ?? String(error), 800)}`,
             );
         });
 };

@@ -1,8 +1,10 @@
 const { SlashCommandBuilder } = require('discord.js');
+const { requireQueue, isBlocked } = require('../lib/musicGuards');
+const { loopLabel } = require('../lib/musicFormat');
 
 // DisTube RepeatMode: 0 = disabled, 1 = this song, 2 = all queue
 const MODES = {
-    off: 0, '0': 0, disable: 0,
+    off: 0, '0': 0, disable: 0, none: 0,
     song: 1, one: 1, '1': 1,
     queue: 2, all: 2, '2': 2,
 };
@@ -28,17 +30,19 @@ module.exports = {
         ),
 
     async execute(ctx) {
-        const queue = ctx.distube.getQueue(ctx.guild);
-        if (!queue) return ctx.reply('Not playing music!');
+        const guard = await requireQueue(ctx);
+        if (isBlocked(guard)) return ctx.reply(guard.reply);
+        const { queue } = guard;
 
         const mode = MODES[String(ctx.args[0] ?? '').toLowerCase()];
         if (mode === undefined) {
-            const current = queue.repeatMode ? (queue.repeatMode === 2 ? 'All Queue' : 'This Song') : 'Off';
-            return ctx.reply(`Current repeat mode: **${current}**. Usage: \`${ctx.config.prefix}repeat <off | song | queue>\``);
+            return ctx.reply(
+                `Current repeat mode: **${loopLabel(queue.repeatMode)}**. ` +
+                `Usage: \`${ctx.config.prefix}repeat <off | song | queue>\``,
+            );
         }
 
         queue.setRepeatMode(mode);
-        const label = mode === 0 ? 'Off' : mode === 1 ? 'This Song' : 'All Queue';
-        return ctx.reply(`🔁 Repeat mode set to **${label}**.`);
+        return ctx.reply(`🔁 Repeat mode set to **${loopLabel(mode)}**.`);
     },
 };

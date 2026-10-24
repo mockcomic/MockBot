@@ -1,29 +1,31 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { requireQueue, isBlocked } = require('../lib/musicGuards');
+const { COLOR, queuePage } = require('../lib/musicFormat');
 
 module.exports = {
     name: 'queue',
     aliases: ['q'],
-    description: 'Show the current music queue',
-    usage: 'queue',
-    data: new SlashCommandBuilder().setName('queue').setDescription('Show the current music queue'),
+    description: 'Show the current music queue (10 songs per page)',
+    usage: 'queue [page]',
+    data: new SlashCommandBuilder()
+        .setName('queue')
+        .setDescription('Show the current music queue')
+        .addIntegerOption(option =>
+            option.setName('page').setDescription('Page number (10 songs per page)').setMinValue(1),
+        ),
 
     async execute(ctx) {
-        const queue = ctx.distube.getQueue(ctx.guild);
-        if (!queue || queue.songs.length === 0) return ctx.reply('Not playing music!');
+        const guard = await requireQueue(ctx, { sameVoice: false });
+        if (isBlocked(guard)) return ctx.reply(guard.reply);
 
-        const listed = queue.songs
-            .slice(0, 10)
-            .map((song, id) => `**${id + 1}**. ${song.name} — \`${song.formattedDuration}\``)
-            .join('\n');
-        const remaining = queue.songs.length - 10;
+        const page = Number.parseInt(ctx.args[0], 10);
+        const view = queuePage(guard.queue, Number.isNaN(page) ? 1 : page);
 
         const embed = new EmbedBuilder()
-            .setColor('#0099ff')
+            .setColor(COLOR.accent)
             .setTitle(`📄 Queue for ${ctx.guild.name}`)
-            .setDescription(listed + (remaining > 0 ? `\n…and ${remaining} more song(s)` : ''))
-            .setFooter({
-                text: `Volume: ${queue.volume}% | Loop: ${queue.repeatMode ? (queue.repeatMode === 2 ? 'All Queue' : 'This Song') : 'Off'} | Autoplay: ${queue.autoplay ? 'On' : 'Off'}`,
-            });
+            .setDescription(view.description)
+            .setFooter({ text: view.footerText });
 
         return ctx.reply({ embeds: [embed] });
     },

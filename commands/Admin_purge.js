@@ -1,8 +1,8 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 
 module.exports = {
     name: 'purge',
-    ownerOnly: true,
+    adminOnly: PermissionFlagsBits.ManageMessages,
     description: 'Delete up to 100 recent messages',
     usage: 'purge <1-100>',
     data: new SlashCommandBuilder()
@@ -13,7 +13,7 @@ module.exports = {
         ),
 
     async execute(ctx) {
-        const amount = parseInt(ctx.args[0], 10);
+        const amount = Number.parseInt(ctx.args[0], 10);
         if (Number.isNaN(amount) || amount < 1 || amount > 100) {
             return ctx.reply(`Usage: \`${ctx.config.prefix}purge <1-100>\``);
         }

@@ -1,4 +1,5 @@
 const { SlashCommandBuilder } = require('discord.js');
+const { requireQueue, isBlocked } = require('../lib/musicGuards');
 
 const MIN_VOLUME = 0;
 const MAX_VOLUME = 150;
@@ -21,10 +22,11 @@ module.exports = {
         ),
 
     async execute(ctx) {
-        const queue = ctx.distube.getQueue(ctx.guild);
-        if (!queue) return ctx.reply('Not playing music!');
+        const guard = await requireQueue(ctx);
+        if (isBlocked(guard)) return ctx.reply(guard.reply);
+        const { queue } = guard;
 
-        const level = parseInt(ctx.args[0], 10);
+        const level = Number.parseInt(ctx.args[0], 10);
         if (Number.isNaN(level) || level < MIN_VOLUME || level > MAX_VOLUME) {
             return ctx.reply(`Usage: \`${ctx.config.prefix}volume <${MIN_VOLUME}-${MAX_VOLUME}>\` (current: ${queue.volume}%)`);
         }

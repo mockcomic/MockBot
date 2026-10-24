@@ -1,4 +1,5 @@
 const { SlashCommandBuilder } = require('discord.js');
+const { requireQueue, isBlocked, explainError } = require('../lib/musicGuards');
 
 module.exports = {
     name: 'skip',
@@ -8,13 +9,13 @@ module.exports = {
     data: new SlashCommandBuilder().setName('skip').setDescription('Skip the current song'),
 
     async execute(ctx) {
-        const queue = ctx.distube.getQueue(ctx.guild);
-        if (!queue) return ctx.reply('Not playing music!');
+        const guard = await requireQueue(ctx);
+        if (isBlocked(guard)) return ctx.reply(guard.reply);
 
         try {
-            await queue.skip();
+            await guard.queue.skip();
         } catch (err) {
-            return ctx.reply(`❌ ${err.message}`);
+            return ctx.reply(`❌ ${explainError(err)}`);
         }
         return ctx.reply('⏭️ Skipped.');
     },
