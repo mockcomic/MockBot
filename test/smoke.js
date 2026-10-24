@@ -1191,6 +1191,12 @@ await check('search picker stores results, expires, and peeks without leaking', 
         },
         reply: async payload => { updated = payload; },
         update: payload => { updated = payload; return Promise.resolve(); },
+        // distube.play resolves late, so the handler MUST defer the update
+        // first and finish via message.edit — a non-deferring handler once
+        // died with "Unknown interaction" against a live Discord.
+        deferred: false,
+        deferUpdate: async () => { interaction.deferred = true; },
+        message: { edit: payload => { updated = payload; return Promise.resolve(payload); } },
     };
     // Go through the dispatcher, not chosen() directly: dispatch calls
     // handlers as (interaction, args, deps), and that shape is exactly the
@@ -1198,6 +1204,7 @@ await check('search picker stores results, expires, and peeks without leaking', 
     const components = require('../lib/components');
     await components.dispatch(interaction, { distube: distubeStub });
     assert.deepEqual(played, { channelId: 'vc-1', songName: 'b' }, 'the chosen song reached distube.play');
+    assert.ok(interaction.deferred, 'the update is deferred before the slow distube.play');
     assert.match(String(updated?.content ?? ''), /Queued/, 'the message became a confirmation');
     assert.equal(picker.peek('tok-play'), null, 'a used picker is consumed');
 
