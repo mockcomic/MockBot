@@ -29,8 +29,13 @@ Raspberry Pi 4.
    | `OWNER` | Your Discord user ID — unlocks owner-only commands and lets you control playback from anywhere |
    | `MOCKBOT_DATA_DIR` | Optional: where the feedback log and menu ids live (default `./data`) |
    | `WEB_USER` + `WEB_PASS` | Optional: enables the web portal (see [Web portal](#web-portal)) |
+   | `WEB_PASS_HASH` | Optional instead of `WEB_PASS`: sha256 hex digest, keeps the password out of `.env` |
+   | `WEB_USERS` | Optional: named accounts `user:sha256hex,user2:sha256hex` — the audit log records who changed what |
    | `WEB_PORT` | Optional: portal port (default `8787`) |
    | `WEB_BIND` | Optional: bind address (default `0.0.0.0` = local network; `127.0.0.1` = this machine only) |
+   | `WEB_ALLOWLIST` | Optional: comma-separated address prefixes allowed to reach the portal (e.g. `127.,192.168.0.`) |
+   | `WEB_TLS_CERT` / `WEB_TLS_KEY` | Optional: serve HTTPS directly from the bot |
+   | `WEB_SECURE=1` | Optional: mark the session cookie `Secure` behind a TLS-terminating proxy |
 
 3. `npm start` (or `npm run dev` for auto-restart with nodemon).
 
@@ -48,27 +53,58 @@ maths, reply-safety helpers, data storage and listeners offline.
 
 ## Web portal (optional)
 
-Set `WEB_USER` and `WEB_PASS` in `.env` and the bot also serves a small
-read-only admin page on port 8787 (change with `WEB_PORT`) — from the bot's
-machine at `http://127.0.0.1:8787/`, from anything else on your network at
-`http://<the bot's LAN address>:8787/`. It shows login-protected status (tag,
-uptime, gateway ping, guild/command counts), per-guild music state (now
-playing, requester, volume, repeat, queue length) and the feedback log.
+Set `WEB_USER` and `WEB_PASS` in `.env` and the bot also serves an admin
+portal on port 8787 (change with `WEB_PORT`) — from the bot's machine at
+`http://127.0.0.1:8787/`, from anything else on your network at
+`http://<the bot's LAN address>:8787/`. Six tabs:
 
-- **Local network.** The server binds to `0.0.0.0`, so anyone who can route to
-  the machine can open it — the login is the access control, so use a real
-  password. Traffic is plain HTTP: fine on a trusted LAN, do not expose the
-  port to the internet. Set `WEB_BIND=127.0.0.1` to lock it back to the bot's
-  own machine; if Windows Firewall asks, allow Node on *private* networks for
-  LAN devices to get through.
-- **Read-only.** Everything still happens in Discord — the portal reports, it
-  does not control.
-- A login session lives in memory for 12 hours (refreshed as you use it) and
-  dies with the bot process; sign in again after a restart. Failed logins are
-  throttled per address to 10 per 5 minutes.
-- Without the two variables the portal is off and boot logs
-  `WEB_USER/WEB_PASS not set`; if the port is taken, boot logs the bind error
-  and the bot keeps running without the page.
+- **Overview** — tag, version, uptime, gateway ping, memory, guild count,
+  loaded/disabled command counts, total command executions, the most-used
+  commands across all servers, and live music state everywhere.
+- **Servers** — every server the bot is in: member/channel/voice counts,
+  boost tier, owner, join date, the permissions it holds, per-server
+  settings (prefix, 24/7, autoplay, vote-skip, modlog channel), that
+  server's command toggles, its own most-used-commands list, and playback
+  controls (skip / pause / resume / stop / volume) that work remotely.
+- **Commands** — every command with its description, access level, use
+  count, and a toggle. Turning one off removes it from the slash picker,
+  the prefix parser and `help` everywhere (re-registered instantly). The
+  bot owner can always run and see everything, so a mass-disable can never
+  lock you out. Per-server force-on/force-off overrides live on the Servers
+  tab; guild staff cannot disable owner-only commands.
+- **Settings** — the editable global params: prefix, default and play
+  cooldowns, idle-leave seconds, vote-skip and autoplay defaults, reaction
+  roles on/off and the emoji-to-role table. Changes take effect **without a
+  restart** (stored in `data/runtime-config.json` layered over
+  `config.json`; every override shows there with a one-click revert).
+- **Feedback** — the user-feedback log, newest first.
+- **Audit** — every change made through the portal, timestamped and
+  attributed to the signed-in account.
+
+Security notes:
+
+- **Local network by default.** The server binds to `0.0.0.0`, so anyone who
+  can route to the machine can open it — the login is the access control, so
+  use a real password. Traffic is plain HTTP unless you set
+  `WEB_TLS_CERT`/`WEB_TLS_KEY` (or `WEB_SECURE=1` behind a TLS proxy): fine
+  on a trusted LAN, do not expose the port to the internet. `WEB_BIND` locks
+  it to one address; `WEB_ALLOWLIST` hard-gates which addresses get an
+  answer at all. If Windows Firewall asks, allow Node on *private* networks
+  for LAN devices to get through.
+- **Session and CSRF.** Sessions are random 32-byte tokens in an `HttpOnly,
+  SameSite=Strict` cookie with sliding 12-hour expiry, bound to your browser
+  fingerprint, capped in count. Every mutation must carry the session's CSRF
+  token in a header — a cross-site form post cannot change anything.
+- **Passwords without passwords.** `WEB_PASS_HASH` (or `WEB_USERS`) store a
+  sha256 digest instead of the plaintext, compared in constant time. Print a
+  digest with:
+  `node -e "console.log(require('crypto').createHash('sha256').update('your password').digest('hex'))"`.
+- **Rate limits.** Failed logins: 10 per 5 minutes per address; API calls are
+  rate-limited per address too, and request bodies are capped at 64 KB.
+- A login session dies with the bot process; sign in again after a restart.
+- Without the credentials the portal is off and boot logs
+  `WEB_USER/WEB_PASS ... not set`; if the port is taken, boot logs the bind
+  error and the bot keeps running without the page.
 
 ## Commands
 

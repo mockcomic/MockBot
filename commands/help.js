@@ -2,6 +2,7 @@ const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { version } = require('../package.json');
 const { canRun, isOwner } = require('../lib/access');
 const guildSettings = require('../lib/guildSettings');
+const commandToggles = require('../lib/commandToggles');
 const { COLOR } = require('../lib/musicFormat');
 const { clip } = require('../lib/respond');
 
@@ -43,6 +44,10 @@ module.exports = {
 
         // ctx.commands is a Map keyed by name, so entries are already unique.
         for (const cmd of ctx.commands.values()) {
+            // Disabled via the portal? The owner still sees everything so a
+            // mass-disable never looks like a broken bot to the one person who
+            // can switch it back (matching the runCommand owner exemption).
+            if (!commandToggles.enabled(cmd.name, ctx.guild?.id) && !isOwner(ctx.user.id)) continue;
             let restrictedLine = null;
             if (cmd.ownerOnly || cmd.adminOnly) {
                 // Restricted: show it only to somebody who can actually run it,

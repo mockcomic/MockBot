@@ -9,5 +9,9 @@
 #   guilds.json           — per-guild settings (prefix, 247, autoplay, voteSkip, modlog)
 #   playlists.json        — `playlist save` snapshots, per guild
 #   reminders.json        — pending `remind` entries (absolute timestamps)
+#   runtime-config.json   — web-portal overrides layered over config.json
+#   command-toggles.json  — which commands are on/off, globally and per guild
+#   usage.json            — command use counters (per guild + overall)
+#   audit.log             — every change made through the web portal
 #
 # Everything in this folder is gitignored except this file.

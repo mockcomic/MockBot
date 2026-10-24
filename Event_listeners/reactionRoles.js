@@ -34,15 +34,9 @@ function resolveRole(guild, entry) {
 }
 
 module.exports = function setupReactionRoles(client, config) {
-    const rr = config.reactionRoles;
-    if (!rr?.enabled || !Array.isArray(rr.roles)) return;
-
-    const byEmoji = new Map();
-    for (const entry of rr.roles) {
-        if (!entry?.emoji) continue;
-        byEmoji.set(entry.emoji, entry);
-    }
-
+    // The emoji→role table and the on/off switch are read per event from the
+    // live config object, so the web portal can edit them without a restart
+    // (lib/runtimeConfig mutates that object in place).
     const warned = new Set();
     const warnOnce = (key, message) => {
         if (warned.has(key)) return;
@@ -52,6 +46,8 @@ module.exports = function setupReactionRoles(client, config) {
 
     const handle = async (reaction, user, add) => {
         try {
+            const rr = config?.reactionRoles;
+            if (!rr?.enabled || !Array.isArray(rr.roles)) return;
             if (user.bot) return;
             if (reaction.partial) reaction = await reaction.fetch();
             if (reaction.message.partial) await reaction.message.fetch();
@@ -62,6 +58,12 @@ module.exports = function setupReactionRoles(client, config) {
             // configured channel anymore: `rr #channel` may post menus anywhere,
             // in any guild. The emoji→role table stays the shared config.json one.
             if (!store.isManaged(message.id)) return;
+
+            const byEmoji = new Map();
+            for (const entry of rr.roles) {
+                if (!entry?.emoji) continue;
+                byEmoji.set(String(entry.emoji), entry);
+            }
 
             const entry = emojiKeys(reaction.emoji).map(key => byEmoji.get(key)).find(Boolean);
             if (!entry) return;

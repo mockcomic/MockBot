@@ -11,10 +11,15 @@ const guildSettings = require('../lib/guildSettings');
  * one timer per guild.
  */
 module.exports = function setupVoiceIdle(client, { distube, config } = {}) {
-    const seconds = Number(config?.music?.leaveOnEmptyAfterSeconds ?? 90);
-    if (!Number.isFinite(seconds) || seconds <= 0) return { timers: new Map(), disabled: true };
+    // Read the live config object at event time, not a snapshot: the web
+    // portal can change the timeout (or park it with 0) while the bot runs.
+    const currentSeconds = () => {
+        const seconds = Number(config?.music?.leaveOnEmptyAfterSeconds ?? 90);
+        return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+    };
+    if (currentSeconds() <= 0) return { timers: new Map(), disabled: true };
 
-    const ms = seconds * 1000;
+    const seconds = currentSeconds();
     /** @type {Map<string, NodeJS.Timeout>} */
     const timers = new Map();
 
@@ -33,18 +38,20 @@ module.exports = function setupVoiceIdle(client, { distube, config } = {}) {
         return count;
     };
 
-    const leave = (guildId, queue, channel) => {
+    const leave = (guildId, queue, channel, secondsNow = seconds) => {
         timers.delete(guildId);
         const name = channel?.name ? `**${channel.name}**` : 'the voice channel';
         queue.textChannel
-            ?.send(`👋 Leaving ${name} — nobody was in the channel for ${seconds}s.`)
+            ?.send(`👋 Leaving ${name} — nobody was in the channel for ${secondsNow}s.`)
             .catch(() => {});
         queue.stop().catch(() => {});
     };
 
     const arm = (queue, channel) => {
         if (timers.has(queue.id)) return;
-        const timer = setTimeout(() => leave(queue.id, queue, channel), ms);
+        const secondsNow = currentSeconds();
+        if (secondsNow <= 0) return; // switched off at runtime
+        const timer = setTimeout(() => leave(queue.id, queue, channel, secondsNow), secondsNow * 1000);
         // Never keep the process alive just for this timer.
         timer.unref?.();
         timers.set(queue.id, timer);

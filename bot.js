@@ -3,11 +3,14 @@ const { Client, GatewayIntentBits, Partials, Events, MessageFlags } = require('d
 const { DisTube } = require('distube');
 const { YtDlpPluginPatched } = require('./lib/YtDlpPluginPatched');
 const config = require('./config.json');
+const runtimeConfig = require('./lib/runtimeConfig');
 const { loadCommands } = require('./commands_Handler');
 const Context = require('./lib/Context');
 const { canRun, isOwner } = require('./lib/access');
 const { clip } = require('./lib/respond');
 const guildSettings = require('./lib/guildSettings');
+const commandToggles = require('./lib/commandToggles');
+const usage = require('./lib/usage');
 const cooldowns = require('./lib/cooldowns');
 const components = require('./lib/components');
 const reminders = require('./lib/reminders');
@@ -77,6 +80,29 @@ const distube = new DisTube(client, {
 
 const { commands, get: getCommand } = loadCommands();
 
+// Apply the portal's persisted runtime overrides IN PLACE on the config
+// object, so every module that captured `config` at boot sees live values.
+runtimeConfig.init(config);
+
+// Slash bodies are rebuilt from the live command map, minus anything switched
+// off globally — the portal calls this after a toggle so disabled commands
+// vanish from Discord's picker too.
+function buildSlashBody() {
+    return [...commands.values()]
+        .filter(cmd => cmd.data && commandToggles.enabled(cmd.name))
+        .map(cmd => cmd.data.toJSON());
+}
+
+async function resyncSlashCommands() {
+    const body = buildSlashBody();
+    const guildsList = [...client.guilds.cache.values()];
+    const results = await Promise.allSettled(
+        guildsList.map(guild => guild.commands.set(body)),
+    );
+    const failed = results.filter(r => r.status === 'rejected').length;
+    return { guilds: guildsList.length, failed, commands: body.length };
+}
+
 setupMusicEvents(distube, { config });
 setupReactionRoles(client, config);
 const idleWatcher = setupVoiceIdle(client, { distube, config });
@@ -85,9 +111,8 @@ client.once(Events.ClientReady, async readyClient => {
     console.log(`Logged in as ${readyClient.user.tag}`);
 
     // Register slash commands in every guild the bot is in (instant rollout).
-    const body = [...commands.values()]
-        .filter(cmd => cmd.data)
-        .map(cmd => cmd.data.toJSON());
+    // Disabled-by-toggle commands are excluded (see buildSlashBody).
+    const body = buildSlashBody();
 
     const results = await Promise.allSettled(
         [...readyClient.guilds.cache.values()].map(guild =>
@@ -112,10 +137,10 @@ client.once(Events.ClientReady, async readyClient => {
     // Deliver reminders that came due while the bot was down and arm the timer.
     reminders.start(readyClient);
 
-    // Optional localhost admin page (WEB_USER/WEB_PASS). It must never be the
+    // Optional admin page (WEB_USER/WEB_PASS). It must never be the
     // reason the bot is dead, so a failed bind only costs a log line.
     try {
-        await startPortal({ client, distube, commands });
+        await startPortal({ client, distube, commands, resyncSlashCommands });
     } catch (err) {
         console.error('[web] portal failed to start', err);
     }
@@ -177,6 +202,13 @@ client.on(Events.InteractionCreate, async interaction => {
 
 async function runCommand(cmd, ctx) {
     try {
+        // Portal/owner command toggles: off globally, or off for this guild
+        // (a per-guild "on" override beats a global "off"). The bot owner can
+        // always reach everything so a mass-disable never locks them out.
+        if (!commandToggles.enabled(cmd.name, ctx.guild?.id) && !isOwner(ctx.user?.id)) {
+            return ctx.reply(`🚫 \`${cmd.name}\` is disabled on this server.`, { ephemeral: true });
+        }
+
         // Spam brake before anything else runs (owner exempt). Heavy commands
         // like play override the default in config.cooldowns.
         const seconds = Number(config.cooldowns?.[cmd.name] ?? config.cooldowns?.default ?? 0);
@@ -188,6 +220,7 @@ async function runCommand(cmd, ctx) {
         if (!access.ok) {
             return ctx.reply(access.reason, { ephemeral: true });
         }
+        usage.record(ctx.guild?.id, cmd.name);
         await cmd.execute(ctx);
     } catch (err) {
         console.error(`[command:${cmd.name}]`, err);

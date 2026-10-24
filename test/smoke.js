@@ -624,7 +624,8 @@ await check('portal login, dashboard, api, logout, throttling', async () => {
         assert.equal(status.user.uptimeSeconds, 90);
         assert.equal(status.user.wsPing, 42);
         assert.equal(status.guilds, 2);
-        assert.equal(status.commands, 2);
+        assert.equal(status.commands.total, 2);
+        assert.equal(status.commands.disabled, 0);
         assert.equal(status.music.length, 1, 'only the guild with a queue appears');
         assert.equal(status.music[0].guild, 'Test Guild');
         assert.equal(status.music[0].playing.name, 'a');
@@ -650,6 +651,197 @@ await check('portal login, dashboard, api, logout, throttling', async () => {
         assert.equal(r.status, 429, 'after ten misses even the right password waits');
     } finally {
         portal.close();
+    }
+});
+
+// --- v3.3: portal admin API (settings, toggles, guilds, audit, CSRF) ----------
+
+await check('portal admin API: csrf, settings, toggles, guild detail, audit', async () => {
+    const runtimeConfig = require('../lib/runtimeConfig');
+    const commandToggles = require('../lib/commandToggles');
+    const usage = require('../lib/usage');
+    const auditLog = require('../lib/auditLog');
+    // Local alias: the file-level `const guildSettings` sits further down and
+    // is still in its temporal dead zone while this block runs.
+    const guildSettings = require('../lib/guildSettings');
+
+    const fakeGuild = {
+        id: 'g-admin',
+        name: 'Admin Guild',
+        memberCount: 42,
+        ownerId: 'owner-id',
+        premiumTier: 1,
+        premiumSubscriptionCount: 3,
+        createdTimestamp: 1_700_000_000_000,
+        joinedTimestamp: 1_710_000_000_000,
+        channels: { cache: new Map([
+            ['c1', { id: 'c1', type: 0 }],
+            ['v1', { id: 'v1', type: 2 }],
+        ]) },
+        members: { me: { permissions: { toArray: () => ['SendMessages', 'Connect'] } } },
+    };
+    const fakeClient = {
+        user: { tag: 'MockBot#0001' },
+        uptime: 60_000,
+        ws: { ping: 10 },
+        guilds: { cache: { size: 1, values: () => [fakeGuild] } },
+    };
+    let resyncs = 0;
+    const portal = await startPortal({
+        client: fakeClient,
+        distube: { getQueue: () => null },
+        commands: new Map([
+            ['play', { name: 'play', description: 'Play a song', data: {} }],
+            ['poll', { name: 'poll', description: 'Make a poll' }],
+            ['reboot', { name: 'reboot', description: 'Restart', ownerOnly: true }],
+        ]),
+        resyncSlashCommands: async () => { resyncs += 1; return { guilds: 1, failed: 0, commands: 2 }; },
+        env: { WEB_USER: 'admin', WEB_PASS: 'correct horse' },
+        port: 0,
+        log: quiet,
+    });
+    assert.ok(portal);
+    const base = `http://127.0.0.1:${portal.port}`;
+    try {
+        const r = await fetch(`${base}/login`, { method: 'POST', body: form('admin', 'correct horse'), redirect: 'manual' });
+        const cookie = r.headers.get('set-cookie').split(';')[0];
+        // The CSRF token is embedded in the dashboard page's body tag.
+        const page = await (await fetch(`${base}/`, { headers: { cookie } })).text();
+        const csrf = page.match(/data-csrf="([0-9a-f]{32})"/)[1];
+        const api = async (path, body) => {
+            const response = await fetch(`${base}${path}`, {
+                method: 'POST',
+                headers: { cookie, 'content-type': 'application/json', 'x-csrf-token': csrf },
+                body: JSON.stringify(body),
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) throw Object.assign(new Error(`${path} -> ${response.status}: ${JSON.stringify(payload)}`), { status: response.status });
+            return payload;
+        };
+        const expectFail = async (path, body, code, why) => {
+            let err = null;
+            try { await api(path, body); } catch (e) { err = e; }
+            assert.ok(err, `${why}: the request should have failed`);
+            if (err.status === undefined) throw err; // a network error is not the expected 4xx
+            assert.equal(err.status, code, why);
+        };
+
+        // A mutation without the CSRF header is refused.
+        const noCsrf = await fetch(`${base}/api/settings`, {
+            method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+            body: JSON.stringify({ path: 'prefix', value: '?' }),
+        });
+        assert.equal(noCsrf.status, 403, 'missing CSRF token blocks the mutation');
+
+        // Settings round-trip through runtimeConfig and mutate the live object.
+        const live = runtimeConfig.init(require('../config.json'));
+        const before = live.prefix;
+        let rr = await api('/api/settings', { path: 'prefix', value: '?' });
+        assert.ok(rr.ok, 'prefix change accepted');
+        assert.equal(live.prefix, '?', 'live config object mutated in place');
+        await expectFail('/api/settings', { path: 'cooldowns.default', value: 99999 }, 400, 'out-of-range cooldown rejected');
+        rr = await api('/api/settings', { path: 'reactionRoles.enabled', value: false });
+        assert.equal(rr.ok, true);
+        assert.equal(live.reactionRoles.enabled, false, 'bool coercion works');
+        rr = await api('/api/settings', { path: 'reactionRoles.roles', value: '[{"name":"HOTS","emoji":"1️⃣","roleId":"123456789012345678"}]' });
+        assert.ok(rr.ok, 'roles JSON accepted');
+        await expectFail('/api/settings', { path: 'reactionRoles.roles', value: '[{"emoji":"1️⃣"}]' }, 400, 'roles without name/roleId refused');
+        await expectFail('/api/settings', { path: 'not.a.setting', value: 1 }, 400, 'unlisted paths are not editable');
+
+        // Guild settings.
+        rr = await api('/api/guild/settings', { guildId: 'g-admin', patch: { prefix: '>', twentyFourSeven: true, bogusKey: 'x' } });
+        assert.ok(rr.ok);
+        assert.equal(guildSettings.get('g-admin').prefix, '>');
+        assert.equal(guildSettings.get('g-admin').twentyFourSeven, true);
+        assert.equal(guildSettings.get('g-admin').bogusKey, undefined, 'unknown patch keys never land');
+
+        // Guild detail lists toggles, usage and derived info.
+        usage.record('g-admin', 'play');
+        usage.record('g-admin', 'play');
+        const detail = await (await fetch(`${base}/api/guilds?id=g-admin`, { headers: { cookie } })).json();
+        assert.equal(detail.selected.memberCount, 42);
+        assert.equal(detail.selected.voiceChannels, 1);
+        assert.equal(detail.selected.permissions, 'SendMessages, Connect');
+        assert.equal(detail.selected.topCommands[0].name, 'play');
+        assert.equal(detail.selected.topCommands[0].count, 2);
+        assert.ok(detail.selected.commands.length === 3, 'every command listed for the guild');
+
+        // Toggles: global off removes it from the picker and triggers resync.
+        rr = await api('/api/commands/toggle', { name: 'poll', guildId: null, on: false });
+        assert.ok(rr.ok);
+        assert.equal(resyncs, 1, 'slash resync ran after the toggle');
+        assert.equal(commandToggles.enabled('poll'), false);
+        assert.equal(commandToggles.enabled('poll', 'g-admin'), false);
+        // A per-guild "force on" beats the global off.
+        rr = await api('/api/commands/toggle', { name: 'poll', guildId: 'g-admin', on: true });
+        assert.ok(rr.ok);
+        assert.equal(commandToggles.enabled('poll', 'g-admin'), true, 'guild override wins');
+        // Owner-only commands ignore guild overrides.
+        rr = await api('/api/commands/toggle', { name: 'reboot', guildId: 'g-admin', on: false });
+        assert.ok(rr.ok);
+        assert.equal(commandToggles.enabled('reboot', 'g-admin'), true, 'guilds cannot disable owner commands');
+        await expectFail('/api/commands/toggle', { name: 'nosuch', guildId: null, on: false }, 400, 'unknown command refused');
+
+        // Audit recorded every mutation, newest first.
+        const lines = await auditLog.read();
+        assert.ok(lines.some(l => /toggle .*poll global -> off/.test(l)), 'the global toggle is in the trail');
+        assert.ok(lines.some(l => /settings prefix = "\?"/.test(l)), 'the settings change is in the trail');
+        const auditApi = await (await fetch(`${base}/api/audit`, { headers: { cookie } })).json();
+        assert.ok(auditApi.lines.length >= 5);
+
+        // Status reflects the disabled count and usage totals.
+        const status = await (await fetch(`${base}/api/status`, { headers: { cookie } })).json();
+        assert.equal(status.commands.disabled, 1, 'poll counts as disabled globally');
+        assert.ok(status.usage.top.find(row => row.name === 'play' && row.count === 2));
+
+        // Reverting the prefix restores config.json's value.
+        rr = await api('/api/settings', { path: 'prefix', value: null });
+        assert.ok(rr.ok);
+        assert.equal(live.prefix, before, 'revert drops the override');
+
+        guildSettings.reset('g-admin');
+        commandToggles.setGlobal('poll', true);
+        usage.clearGuild('g-admin');
+    } finally {
+        portal.close();
+    }
+});
+
+await check('portal password can be stored as a hash; allowlist gates addresses', async () => {
+    const crypto = require('node:crypto');
+    const hex = crypto.createHash('sha256').update('hunter2').digest('hex');
+    const portal = await startPortal({
+        client: { guilds: { cache: { values: () => [] } } },
+        distube: {},
+        env: { WEB_USER: 'admin', WEB_PASS_HASH: hex },
+        port: 0,
+        log: quiet,
+    });
+    assert.ok(portal, 'WEB_PASS_HASH alone enables the portal');
+    const base = `http://127.0.0.1:${portal.port}`;
+    try {
+        let r = await fetch(`${base}/login`, { method: 'POST', body: form('admin', 'wrong') });
+        assert.equal(r.status, 401);
+        r = await fetch(`${base}/login`, { method: 'POST', body: form('admin', 'hunter2'), redirect: 'manual' });
+        assert.equal(r.status, 302, 'the pre-image matching the digest signs in');
+    } finally {
+        portal.close();
+    }
+
+    // An allowlist that cannot match ::1 rejects even a correct login attempt.
+    const gated = await startPortal({
+        client: { guilds: { cache: { values: () => [] } } },
+        distube: {},
+        env: { WEB_USER: 'admin', WEB_PASS: 'p', WEB_ALLOWLIST: '10.99.' },
+        port: 0,
+        log: quiet,
+    });
+    assert.ok(gated);
+    try {
+        const r = await fetch(`http://127.0.0.1:${gated.port}/login`);
+        assert.equal(r.status, 403, 'a non-allowlisted address is refused before the form renders');
+    } finally {
+        gated.close();
     }
 });
 
