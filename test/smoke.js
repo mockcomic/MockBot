@@ -1192,7 +1192,11 @@ await check('search picker stores results, expires, and peeks without leaking', 
         reply: async payload => { updated = payload; },
         update: payload => { updated = payload; return Promise.resolve(); },
     };
-    await picker.chosen(interaction, { distube: distubeStub });
+    // Go through the dispatcher, not chosen() directly: dispatch calls
+    // handlers as (interaction, args, deps), and that shape is exactly the
+    // bug this test used to miss (the pick handler bound deps to args).
+    const components = require('../lib/components');
+    await components.dispatch(interaction, { distube: distubeStub });
     assert.deepEqual(played, { channelId: 'vc-1', songName: 'b' }, 'the chosen song reached distube.play');
     assert.match(String(updated?.content ?? ''), /Queued/, 'the message became a confirmation');
     assert.equal(picker.peek('tok-play'), null, 'a used picker is consumed');
