@@ -63,7 +63,13 @@ function logState(oldState, newState) {
         await client.login(process.env.TOKEN);
 
         const wanted = process.argv[2];
-        const guild = wanted ? client.guilds.cache.get(wanted) : client.guilds.cache.find(g =>
+        // GUILD_CREATE payloads land asynchronously after login(); reading the
+        // cache straight away finds no channels and the probe blames itself
+        // ("no joinable voice channel") when the bot is fine. Fetch first.
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        const guilds = [...client.guilds.cache.values()];
+        for (const g of guilds) await g.channels.fetch().catch(() => {});
+        const guild = wanted ? client.guilds.cache.get(wanted) : guilds.find(g =>
             g.channels.cache.find(c => c.type === ChannelType.GuildVoice && c.joinable),
         );
         assert.ok(guild, `guild ${wanted ?? 'with a joinable voice channel'} not found (is the bot invited?)`);
