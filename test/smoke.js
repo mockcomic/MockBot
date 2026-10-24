@@ -516,9 +516,13 @@ await check('music.play helper exported', () => {
 
 // --- web portal ---------------------------------------------------------------
 
-const { startPortal, isLoopback } = require('../web/portal');
+const { startPortal, DEFAULT_BIND } = require('../web/portal');
 const quiet = { log: () => {}, warn: () => {}, error: () => {} };
 const form = (user, pass) => new URLSearchParams({ user, pass });
+
+/** First real (non-internal) IPv4 of this machine, or null on a bare dev box. */
+const lanIp = Object.values(os.networkInterfaces()).flat()
+    .find(i => i.family === 'IPv4' && !i.internal)?.address ?? null;
 
 await check('portal stays off without WEB_USER/WEB_PASS', async () => {
     assert.equal(await startPortal({ client: {}, distube: {}, env: {}, port: 0, log: quiet }), null,
@@ -527,12 +531,38 @@ await check('portal stays off without WEB_USER/WEB_PASS', async () => {
         'a user without a password is still disabled');
 });
 
-await check('isLoopback accepts only loopback forms', () => {
-    for (const ip of ['127.0.0.1', '127.5.6.7', '::1', '0:0:0:0:0:0:0:1', '::ffff:127.0.0.1']) {
-        assert.equal(isLoopback(ip), true, `${ip} is loopback`);
+await check('portal faces the local network; WEB_BIND can lock it to localhost', async () => {
+    assert.equal(DEFAULT_BIND, '0.0.0.0', 'default bind must expose the portal on the LAN');
+    if (!lanIp) return; // nothing to probe without a LAN interface
+
+    const open = await startPortal({
+        client: {}, distube: {}, env: { WEB_USER: 'a', WEB_PASS: 'b' }, port: 0, log: quiet,
+    });
+    assert.ok(open, 'portal starts with credentials set');
+    try {
+        const r = await fetch(`http://${lanIp}:${open.port}/login`);
+        assert.equal(r.status, 200, `reachable over the LAN address ${lanIp}`);
+    } finally {
+        open.close();
     }
-    for (const ip of ['192.168.1.5', '10.0.0.1', '::ffff:10.0.0.1', '8.8.8.8', '127.0.0.256', '']) {
-        assert.equal(isLoopback(ip), false, `${ip} is not loopback`);
+
+    const locked = await startPortal({
+        client: {}, distube: {}, env: { WEB_USER: 'a', WEB_PASS: 'b', WEB_BIND: '127.0.0.1' },
+        port: 0, log: quiet,
+    });
+    assert.ok(locked, 'WEB_BIND=127.0.0.1 starts');
+    try {
+        assert.equal((await fetch(`http://127.0.0.1:${locked.port}/login`)).status, 200,
+            'localhost still answers when locked down');
+        let refused = false;
+        try {
+            await fetch(`http://${lanIp}:${locked.port}/login`, { signal: AbortSignal.timeout(3000) });
+        } catch {
+            refused = true;
+        }
+        assert.ok(refused, `WEB_BIND=127.0.0.1 refuses ${lanIp}`);
+    } finally {
+        locked.close();
     }
 });
 
@@ -557,7 +587,7 @@ await check('portal login, dashboard, api, logout, throttling', async () => {
         distube: fakeDistube,
         commands: new Map([['play'], ['skip']]),
         env: { WEB_USER: 'admin', WEB_PASS: 'correct horse' },
-        port: 0, // ephemeral; isLoopback covers the rest since we fetch over 127.0.0.1
+        port: 0, // ephemeral; the test talks to it over 127.0.0.1
         log: quiet,
     });
     assert.ok(portal, 'portal starts when both credentials are set');

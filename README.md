@@ -28,8 +28,9 @@ Raspberry Pi 4.
    | `TOKEN` | Discord bot token (required) |
    | `OWNER` | Your Discord user ID — unlocks owner-only commands and lets you control playback from anywhere |
    | `MOCKBOT_DATA_DIR` | Optional: where the feedback log and menu ids live (default `./data`) |
-   | `WEB_USER` + `WEB_PASS` | Optional: enables the localhost web portal (see [Web portal](#web-portal)) |
+   | `WEB_USER` + `WEB_PASS` | Optional: enables the web portal (see [Web portal](#web-portal)) |
    | `WEB_PORT` | Optional: portal port (default `8787`) |
+   | `WEB_BIND` | Optional: bind address (default `0.0.0.0` = local network; `127.0.0.1` = this machine only) |
 
 3. `npm start` (or `npm run dev` for auto-restart with nodemon).
 
@@ -48,19 +49,23 @@ maths, reply-safety helpers, data storage and listeners offline.
 ## Web portal (optional)
 
 Set `WEB_USER` and `WEB_PASS` in `.env` and the bot also serves a small
-read-only admin page at `http://127.0.0.1:8787/` (change with `WEB_PORT`).
-It shows login-protected status (tag, uptime, gateway ping, guild/command
-counts), per-guild music state (now playing, requester, volume, repeat, queue
-length) and the feedback log.
+read-only admin page on port 8787 (change with `WEB_PORT`) — from the bot's
+machine at `http://127.0.0.1:8787/`, from anything else on your network at
+`http://<the bot's LAN address>:8787/`. It shows login-protected status (tag,
+uptime, gateway ping, guild/command counts), per-guild music state (now
+playing, requester, volume, repeat, queue length) and the feedback log.
 
-- **Localhost only.** The server binds to `127.0.0.1`, so opening the port on a
-  remote machine gets connection-refused; there is no reverse-proxy mode and no
-  second listener.
+- **Local network.** The server binds to `0.0.0.0`, so anyone who can route to
+  the machine can open it — the login is the access control, so use a real
+  password. Traffic is plain HTTP: fine on a trusted LAN, do not expose the
+  port to the internet. Set `WEB_BIND=127.0.0.1` to lock it back to the bot's
+  own machine; if Windows Firewall asks, allow Node on *private* networks for
+  LAN devices to get through.
 - **Read-only.** Everything still happens in Discord — the portal reports, it
   does not control.
 - A login session lives in memory for 12 hours (refreshed as you use it) and
   dies with the bot process; sign in again after a restart. Failed logins are
-  throttled to 10 per 5 minutes.
+  throttled per address to 10 per 5 minutes.
 - Without the two variables the portal is off and boot logs
   `WEB_USER/WEB_PASS not set`; if the port is taken, boot logs the bind error
   and the bot keeps running without the page.
@@ -216,6 +221,9 @@ A `feedback.txt` left in the repo root by an older install is moved into `data/`
 - **Web portal did not start** — both `WEB_USER` and `WEB_PASS` must be set, and
   `WEB_PORT` (default 8787) must be free; the boot log says which of the two it
   was.
+- **Portal unreachable from another device** — `WEB_BIND` must not be
+  `127.0.0.1` (that locks it to the bot's machine), and the OS firewall has to
+  allow Node on the private network.
 - **`rr` says the channel was not found** — `reactionRoles.channelId` points at a
   channel this guild does not have.
 - **Roles are not assigned** — the bot's highest role is below the target role, or

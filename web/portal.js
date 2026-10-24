@@ -2,11 +2,13 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 
 /**
- * Optional localhost web portal.
+ * Optional local-network web portal.
  *
  * A tiny read-only admin page served by the bot process itself: status,
- * per-guild music state and the feedback log. Bound to 127.0.0.1 only, so it
- * is reachable from the machine the bot runs on and refused everywhere else.
+ * per-guild music state and the feedback log. Bound to every interface by
+ * default, so anyone on the local network can open it; the login (WEB_USER /
+ * WEB_PASS) is the access control. Set WEB_BIND=127.0.0.1 to lock it back to
+ * the machine the bot runs on.
  *
  * Enabled only when both WEB_USER and WEB_PASS are present in the environment
  * (see .env.example). One shared login; a session is an in-memory random token
@@ -19,7 +21,7 @@ const crypto = require('node:crypto');
  * break out of the page the way a Discord mention cannot break out of a reply.
  */
 
-const BIND_HOST = '127.0.0.1';
+const DEFAULT_BIND = '0.0.0.0'; // all interfaces: reachable on the local network
 const DEFAULT_PORT = 8787;
 const COOKIE_NAME = 'mockbot_session';
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 h, refreshed on use
@@ -38,19 +40,6 @@ function sha256(text) {
 /** Length-independent constant-time compare (both sides are 32-byte digests). */
 function matchesSecret(given, expectedHash) {
     return crypto.timingSafeEqual(sha256(given), expectedHash);
-}
-
-/**
- * True only for loopback addresses, including the IPv4-mapped IPv6 form a
- * dual-stack socket can hand out (`::ffff:127.0.0.1`).
- */
-function isLoopback(ip) {
-    if (typeof ip !== 'string' || !ip) return false;
-    const mapped = ip.startsWith('::ffff:') ? ip.slice(7) : ip;
-    return mapped === '::1'
-        || mapped === '0:0:0:0:0:0:0:1'
-        || (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(mapped)
-            && mapped.split('.').every(part => Number(part) <= 255));
 }
 
 function parseCookies(header) {
@@ -291,6 +280,7 @@ function buildStatus({ client, distube, commands }) {
  * @param {Map}    [options.commands] loaded command map, for the count
  * @param {object} [options.env]     credential source (default process.env)
  * @param {number} [options.port]    bind port override (default WEB_PORT or 8787; 0 = ephemeral, for tests)
+ * @param {string} [options.bind]    bind address override (default WEB_BIND or 0.0.0.0)
  * @param {object} [options.log]     console-shaped logger
  */
 async function startPortal(options = {}) {
@@ -310,6 +300,10 @@ async function startPortal(options = {}) {
         if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 65535) port = parsed;
         else log.warn(`[web] WEB_PORT "${rawPort}" is not a port number; using ${DEFAULT_PORT}.`);
     }
+
+    // Default faces the local network; WEB_BIND=127.0.0.1 locks it back to
+    // this machine. A bad address fails the listen and costs only a log line.
+    const bind = String(options.bind ?? env.WEB_BIND ?? '').trim() || DEFAULT_BIND;
 
     const loginLimit = Number.isInteger(options.loginLimit) ? options.loginLimit : LOGIN_LIMIT;
     const loginWindowMs = Number.isFinite(options.loginWindowMs) ? options.loginWindowMs : LOGIN_WINDOW_MS;
@@ -366,12 +360,9 @@ async function startPortal(options = {}) {
         res.setHeader('content-security-policy',
             "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
 
-        // Belt and braces: the bind already restricts to loopback, but never
-        // answer a request that somehow arrived from elsewhere.
-        if (!isLoopback(req.socket.remoteAddress ?? '')) {
-            return fail(res, 403, 'forbidden — the portal only answers localhost');
-        }
-
+        // No IP gate: the portal faces the local network on purpose, and the
+        // session cookie (issued only after a correct login) is the access
+        // control. The login itself is throttled per source address.
         let pathname;
         try {
             pathname = new URL(req.url, 'http://127.0.0.1').pathname;
@@ -476,16 +467,19 @@ async function startPortal(options = {}) {
         const onListening = () => { server.off('error', onError); resolve(server.address().port); };
         server.once('listening', onListening);
         server.once('error', onError);
-        server.listen(port, BIND_HOST);
+        server.listen(port, bind);
     }).catch(err => {
-        log.error(`[web] portal could not bind ${BIND_HOST}:${port} (${err.code ?? err.message}) — the bot keeps running without it.`);
+        log.error(`[web] portal could not bind ${bind}:${port} (${err.code ?? err.message}) — the bot keeps running without it.`);
         return null;
     });
     if (boundPort === null) return null;
 
     // Anything after startup (rare) should also only cost us a log line.
     server.on('error', err => log.error('[web]', err?.message ?? err));
-    log.log(`[web] portal on http://${BIND_HOST}:${boundPort}/ (sign in with WEB_USER)`);
+    const reach = bind === DEFAULT_BIND || bind === '::'
+        ? 'sign in from the local network'
+        : `sign in from ${bind}`;
+    log.log(`[web] portal on http://${bind === DEFAULT_BIND ? '127.0.0.1' : bind}:${boundPort}/ (${reach})`);
 
     return {
         server,
@@ -499,4 +493,4 @@ async function startPortal(options = {}) {
     };
 }
 
-module.exports = { startPortal, isLoopback, DEFAULT_PORT };
+module.exports = { startPortal, DEFAULT_BIND, DEFAULT_PORT };
