@@ -83,6 +83,11 @@ const distube = new DisTube(client, {
     ffmpeg: { path: ffmpegPath },
 });
 
+// musicBot, autoplay and sponsorBlock each attach one listener per event to
+// the shared DisTube emitter; give them room so nobody trips the default
+// MaxListeners warning (the emitter starts at an unusually low budget).
+distube.setMaxListeners(10);
+
 const { commands, get: getCommand } = loadCommands();
 
 // Apply the portal's persisted runtime overrides IN PLACE on the config
