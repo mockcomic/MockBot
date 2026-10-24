@@ -11,11 +11,11 @@ Raspberry Pi 4.
 
 - **Node.js 22.12 or newer** — the installed DisTube declares `>=22.12.0`
   (`node -v` to check; the bot warns at startup if you are behind).
-- A Discord application/bot with the **MESSAGE CONTENT** and **SERVER MEMBERS**
-  privileged intents enabled (Developer Portal → your application → Bot →
-  Privileged Gateway Intents). MESSAGE CONTENT powers the `!prefix` commands;
-  SERVER MEMBERS powers the join welcome, auto-role and member join/leave
-  modlog lines.
+- A Discord application/bot with the **MESSAGE CONTENT** privileged intent enabled
+  (Developer Portal → your application → Bot → Privileged Gateway Intents).
+  **SERVER MEMBERS** powers the join welcome, auto-role and member join/leave
+  modlog lines, but Discord withholds it from unverified bots — the bot asks
+  the API at boot and simply runs without those features until it is granted.
 - Invited with the `bot` and `applications.commands` scopes and at least:
   Send Messages, Manage Messages, Read Message History, Embed Links, Add Reactions,
   Connect, Speak. For `timeout`: Moderate Members; for `modlog`/`prefix`: Manage Server.
@@ -160,7 +160,8 @@ a restart)
 **Join handling** — `welcome channel #general` greets new members (template with
 `{member} {guild} {count}`), `welcome roles @Member @Verified` auto-assigns
 them, and joins/leaves are logged to the `modlog` channel whenever one is set.
-Needs the SERVER MEMBERS privileged intent.
+Needs the SERVER MEMBERS privileged intent; unverified bots get a boot warning
+and the rest of the bot keeps working without it.
 
 **DJ + music channel** — `dj role @DJ` restricts queue control to that role (the
 song requester, staff with Manage Server, and the bot owner always pass);

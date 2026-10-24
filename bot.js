@@ -53,8 +53,7 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent, // privileged: enable it in the Developer Portal
-        GatewayIntentBits.GuildMembers,   // privileged: welcome/auto-role/modlog joins
+        GatewayIntentBits.MessageContent, // privileged: enabled in the Developer Portal
         GatewayIntentBits.GuildVoiceStates,
     ],
     partials: [Partials.Message, Partials.Channel, Partials.Reaction],
@@ -62,6 +61,46 @@ const client = new Client({
     // let it ping @everyone or a role on our behalf.
     allowedMentions: { parse: ['users'], repliedUser: true },
 });
+
+/**
+ * Guild Members is a privileged intent that Discord refuses until the
+ * application clears verification (or passes the 100-server threshold).
+ * Rather than refusing to boot at all, ask Discord what we are actually
+ * allowed to use: the flags bitfield from GET /applications/@me (1<<14 =
+ * GUILD_MEMBERS). Without it the bot runs fully except the join welcome,
+ * auto-role and member join/leave modlog lines.
+ */
+async function grantedIntents() {
+    const token = process.env.TOKEN;
+    if (!token) return null; // cannot ask; assume allowed and let the gateway say no
+    try {
+        const res = await fetch('https://discord.com/api/v10/applications/@me', {
+            headers: { authorization: `Bot ${token}` },
+            signal: AbortSignal.timeout(6000),
+        });
+        if (!res.ok) return null;
+        const app = await res.json();
+        return Number(app.flags) || 0;
+    } catch {
+        return null; // offline/API hiccup: try with everything, the boot error will explain
+    }
+}
+
+const GUILD_MEMBERS_FLAG = 1 << 14;
+
+/** Add Guild Members to the intent set only when Discord says we may have it. */
+async function applyAllowedPrivilegedIntents() {
+    const flags = await grantedIntents();
+    if (flags === null || flags & GUILD_MEMBERS_FLAG) {
+        client.options.intents.add(GatewayIntentBits.GuildMembers);
+    } else {
+        console.warn(
+            '[boot] SERVER MEMBERS intent is not granted to this application yet (bot verification), ' +
+            'so join welcome/auto-role and member join/leave modlog are OFF. ' +
+            'Enable it at https://discord.com/developers/applications and restart to turn them on.',
+        );
+    }
+}
 
 client.on(Events.Error, err => console.error('[client]', err));
 client.on(Events.Warn, info => console.warn('[client]', info));
@@ -256,10 +295,12 @@ async function runCommand(cmd, ctx) {
     }
 }
 
-client.login(process.env.TOKEN).catch(err => {
-    console.error(`[boot] Login failed: ${err.message}`);
-    console.error('Check that TOKEN in .env is valid, and that the bot application is still active.');
-    process.exit(1);
-});
+applyAllowedPrivilegedIntents()
+    .then(() => client.login(process.env.TOKEN))
+    .catch(err => {
+        console.error(`[boot] Login failed: ${err.message}`);
+        console.error('Check that TOKEN in .env is valid, and that the bot application is still active.');
+        process.exit(1);
+    });
 
 module.exports = { client, distube, config, commands };
