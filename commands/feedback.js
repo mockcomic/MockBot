@@ -1,8 +1,5 @@
-const fs = require('node:fs');
-const path = require('node:path');
 const { SlashCommandBuilder } = require('discord.js');
-
-const FEEDBACK_FILE = path.join(__dirname, '..', 'feedback.txt');
+const { append } = require('../lib/feedbackStore');
 
 module.exports = {
     name: 'feedback',
@@ -12,16 +9,30 @@ module.exports = {
         .setName('feedback')
         .setDescription('Send feedback to the bot owner')
         .addStringOption(option =>
-            option.setName('message').setDescription('Your feedback').setRequired(true),
+            option
+                .setName('message')
+                .setDescription('Your feedback')
+                .setRequired(true)
+                .setMaxLength(500),
         ),
 
     async execute(ctx) {
         const content = ctx.args.join(' ').trim();
         if (!content) return ctx.reply(`Usage: \`${ctx.config.prefix}feedback <your feedback>\``);
 
-        const line = `${new Date().toISOString()} ${ctx.user.tag ?? ctx.user.username}: ${content}\n`;
+        // The guild name tells the owner where the note came from; the tag is
+        // the author's own text, so it is not a spoofing risk.
+        const where = ctx.guild ? ` (${ctx.guild.name})` : '';
+        const line = `${new Date().toISOString()} ${ctx.user.tag ?? ctx.user.username}${where}: ${content}`;
 
-        await fs.promises.appendFile(FEEDBACK_FILE, line, 'utf8');
-        return ctx.reply('☑️ Thanks! Your feedback has been saved.');
+        try {
+            await append(line);
+        } catch (err) {
+            console.error('[feedback]', err);
+            return ctx.reply(`❌ Could not save your feedback: ${err.message}`);
+        }
+
+        // Ephemeral: nobody else needs a congratulations ping.
+        return ctx.reply('☑️ Thanks! Your feedback has been saved.', { ephemeral: true });
     },
 };

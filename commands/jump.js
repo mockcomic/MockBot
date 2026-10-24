@@ -1,30 +1,42 @@
 const { SlashCommandBuilder } = require('discord.js');
+const { requireQueue, isBlocked, resolveJumpTarget, explainError } = require('../lib/musicGuards');
 
 module.exports = {
     name: 'jump',
-    description: 'Jump to a specific song in the queue',
-    usage: 'jump <song number>',
+    description: 'Jump to a queue position (2 = next song, negative numbers go back through history)',
+    usage: 'jump <position>',
     data: new SlashCommandBuilder()
         .setName('jump')
-        .setDescription('Jump to a specific song in the queue')
+        .setDescription('Jump to a queue position (2 = next song, negative = history)')
         .addIntegerOption(option =>
-            option.setName('position').setDescription('Song number in the queue').setMinValue(1).setRequired(true),
+            option
+                .setName('position')
+                .setDescription('Position from `queue`: 2 = next song, -1 = previous song')
+                .setMinValue(-50)
+                .setMaxValue(1000)
+                .setRequired(true),
         ),
 
     async execute(ctx) {
-        const queue = ctx.distube.getQueue(ctx.guild);
-        if (!queue) return ctx.reply('Not playing music!');
+        const guard = await requireQueue(ctx);
+        if (isBlocked(guard)) return ctx.reply(guard.reply);
+        const { queue } = guard;
 
-        const position = parseInt(ctx.args[0], 10);
-        if (Number.isNaN(position) || position < 1 || position >= queue.songs.length) {
-            return ctx.reply(`Invalid song number. The queue has ${queue.songs.length} song(s) (position 1 is playing now).`);
+        const position = Number.parseInt(ctx.args[0], 10);
+        if (Number.isNaN(position)) {
+            return ctx.reply(`Usage: \`${ctx.config.prefix}jump <position>\` — use \`${ctx.config.prefix}queue\` to see positions.`);
         }
+
+        const target = resolveJumpTarget(position, queue.songs.length, queue.previousSongs.length);
+        if (!target.ok) return ctx.reply(`❌ ${target.error}`);
 
         try {
-            await queue.jump(position);
+            await queue.jump(target.apiPosition);
         } catch (err) {
-            return ctx.reply(`❌ ${err.message}`);
+            return ctx.reply(`❌ ${explainError(err)}`);
         }
-        return ctx.reply(`⏭️ Jumped to song **${position}**.`);
+
+        const where = target.apiPosition > 0 ? `song **${target.position}**` : `song **${target.position}** (history)`;
+        return ctx.reply(`⏭️ Jumped to ${where}.`);
     },
 };

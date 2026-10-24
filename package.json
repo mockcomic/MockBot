@@ -1,10 +1,15 @@
 {
   "name": "mockbot",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "discord utility & music bot",
   "main": "bot.js",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "nodemon bot.js",
+    "test": "node test/smoke.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.18.0",
@@ -17,11 +22,7 @@
     "opusscript": "^0.1.1"
   },
   "devDependencies": {
-    "nodemon": "^2.0.13"
-  },
-  "scripts": {
-    "start": "node bot.js",
-    "dev": "nodemon bot.js"
+    "nodemon": "^3.1.9"
   },
   "repository": {
     "type": "git",
@@ -34,7 +35,7 @@
     "mockcomic"
   ],
   "author": "kurtis hight",
-  "license": "ISC",
+  "license": "MIT",
   "bugs": {
     "url": "https://github.com/mockcomic/MockBot/issues"
   },

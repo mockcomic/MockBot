@@ -8,6 +8,13 @@ node_modules/
 # dotenv environment variables file
 .env
 
+# Runtime state written by the bot (feedback log, reaction-role menu ids).
+# Kept out of git so `update` can never overwrite or discard it.
+/data/*
+!/data/README.md
+# Legacy location, migrated into /data on first use.
+/feedback.txt
+
 # personal games
 script.js
 tsap.js
