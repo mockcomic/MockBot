@@ -1153,7 +1153,7 @@ await check('djReply: no role set = open; role set gates by membership, requeste
 
 const picker = require('../lib/searchPicker');
 
-await check('search picker stores results, expires, and peeks without leaking', () => {
+await check('search picker stores results, expires, and peeks without leaking', async () => {
     picker.open('tok-1', {
         songs: [{ name: 'a', url: 'https://example.invalid/a' }],
         voiceChannelId: 'v', textChannelId: 't', guildId: 'g', userId: 'u',
@@ -1164,6 +1164,38 @@ await check('search picker stores results, expires, and peeks without leaking', 
     picker.pickers.get('tok-1').expires = Date.now() - 1;
     assert.equal(picker.peek('tok-1'), null, 'an expired picker peeks as null');
     assert.ok(!picker.pickers.has('tok-1'), 'peeking an expired picker deletes it');
+
+    // End-to-end through the handler: a live picker + a fake select interaction
+    // must reach distube.play and rewrite the message (a missing import here
+    // once produced "that control no longer works" on every pick).
+    picker.open('tok-play', {
+        songs: [{ name: 'b', url: 'https://example.invalid/b', duration: 10 }],
+        voiceChannelId: 'vc-1', textChannelId: 'tc-1', guildId: 'g-pick', userId: 'u-picker',
+    });
+    let played = null;
+    let updated = null;
+    const distubeStub = {
+        getQueue: () => null,
+        play: async (channel, song) => { played = { channelId: channel.id, songName: song.name }; },
+    };
+    const interaction = {
+        customId: 'mb:pick:tok-play',
+        values: ['1'],
+        user: { id: 'u-picker' },
+        member: { voice: { channel: { id: 'vc-1' } }, id: 'u-picker' },
+        guild: {
+            id: 'g-pick',
+            channels: { cache: new Map() },
+            members: { me: { voice: { channelId: 'vc-1' } }, fetch: async () => ({}) },
+            roles: { cache: { get: () => null } },
+        },
+        reply: async payload => { updated = payload; },
+        update: payload => { updated = payload; return Promise.resolve(); },
+    };
+    await picker.chosen(interaction, { distube: distubeStub });
+    assert.deepEqual(played, { channelId: 'vc-1', songName: 'b' }, 'the chosen song reached distube.play');
+    assert.match(String(updated?.content ?? ''), /Queued/, 'the message became a confirmation');
+    assert.equal(picker.peek('tok-play'), null, 'a used picker is consumed');
 
     const payload = picker.pickerPayload('test query', [{ name: 'Song [one]', url: 'https://example.invalid/1', duration: 65 }], 'tok');
     assert.equal(payload.components.length, 1, 'one action row');
