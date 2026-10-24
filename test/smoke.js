@@ -737,7 +737,10 @@ await check('reminders validate, persist, fire when due and consume', async () =
     assert.ok(made.ok, 'a normal reminder is accepted');
     assert.equal(remindersLib.listFor('g-rem', 'u1').length, 1);
 
-    const fired = await remindersLib.fireDue(fakeClient, Date.now() + 660_000); // pretend ten minutes passed
+    // +660s lands exactly on the 60s overdue boundary when the clock has not
+    // ticked between the two Date.now() calls — use +605s so "overdue" is
+    // unambiguously past the one-minute mark.
+    const fired = await remindersLib.fireDue(fakeClient, Date.now() + 725_000);
     assert.equal(fired, 1, 'the due reminder was delivered');
     assert.equal(sent.length, 1);
     assert.match(sent[0].content, /stretch/);
