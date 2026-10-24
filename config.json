@@ -1,7 +1,13 @@
 {
     "prefix": "!",
+    "cooldowns": {
+        "default": 3,
+        "play": 5
+    },
     "music": {
-        "leaveOnEmptyAfterSeconds": 90
+        "leaveOnEmptyAfterSeconds": 90,
+        "voteSkipEnabled": true,
+        "autoplayByDefault": false
     },
     "reactionRoles": {
         "enabled": true,

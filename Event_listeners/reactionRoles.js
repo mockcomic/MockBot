@@ -57,7 +57,10 @@ module.exports = function setupReactionRoles(client, config) {
             if (reaction.message.partial) await reaction.message.fetch();
 
             const message = reaction.message;
-            if (!message.guild || message.channel.id !== rr.channelId) return;
+            if (!message.guild) return;
+            // Menu trust is per-message (lib/reactionRolesStore), not per
+            // configured channel anymore: `rr #channel` may post menus anywhere,
+            // in any guild. The emoji→role table stays the shared config.json one.
             if (!store.isManaged(message.id)) return;
 
             const entry = emojiKeys(reaction.emoji).map(key => byEmoji.get(key)).find(Boolean);

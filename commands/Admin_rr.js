@@ -1,44 +1,67 @@
-const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
 const store = require('../lib/reactionRolesStore');
 const { COLOR, mdTitle } = require('../lib/musicFormat');
 
 /**
- * Post the reaction-role menu into config.reactionRoles.channelId.
+ * Post the reaction-role menu.
  *
- * This used to post into whatever channel the command was run from, while the
- * listener only accepted reactions in the configured channel — so a menu posted
- * anywhere else looked fine and silently did nothing.
+ * Target channel, in order of precedence: an explicit channel argument
+ * (`rr #reviews`), config.reactionRoles.channelId, or the channel the command
+ * ran in. Menus are remembered per message (lib/reactionRolesStore), so
+ * reactions only assign roles on menus this bot posted — in any channel, in
+ * any guild.
  */
 module.exports = {
     name: 'rr',
     adminOnly: PermissionFlagsBits.ManageRoles,
-    description: 'Post the reaction-role menu into the configured channel',
-    usage: 'rr',
+    description: 'Post the reaction-role menu (optionally into a given channel)',
+    usage: 'rr [#channel]',
+    category: 'staff',
     data: new SlashCommandBuilder()
         .setName('rr')
-        .setDescription('Post the reaction-role menu (into reactionRoles.channelId)'),
+        .setDescription('Post the reaction-role menu')
+        .addChannelOption(option =>
+            option
+                .setName('channel')
+                .setDescription('Where to post (default: reactionRoles.channelId, else this channel)')
+                .addChannelTypes(ChannelType.GuildText),
+        ),
 
     async execute(ctx) {
         const rr = ctx.config.reactionRoles;
         if (!rr?.enabled || !Array.isArray(rr.roles) || rr.roles.length === 0) {
             return ctx.reply('❌ Reaction roles are not configured in config.json.');
         }
-        if (!rr.channelId) {
-            return ctx.reply('❌ Set `reactionRoles.channelId` in config.json first.');
+
+        const requested = String(ctx.option('channel') ?? ctx.args[0] ?? '').trim();
+        let target = null;
+        let source = 'this channel';
+
+        if (requested) {
+            const channelId = requested.match(/(\d{17,20})/)?.[1];
+            if (!channelId) return ctx.reply('❌ Mention the channel: `rr #roles`.');
+            target =
+                ctx.guild.channels.cache.get(channelId) ??
+                (await ctx.guild.channels.fetch(channelId).catch(() => null));
+            if (!target) return ctx.reply('❌ That channel was not found in this server.');
+            source = 'the channel you named';
+        } else if (rr.channelId) {
+            target =
+                ctx.guild.channels.cache.get(rr.channelId) ??
+                (await ctx.guild.channels.fetch(rr.channelId).catch(() => null));
+            if (!target) {
+                return ctx.reply(
+                    `❌ Configured channel \`${rr.channelId}\` was not found in **${ctx.guild.name}**. ` +
+                    'Fix `reactionRoles.channelId` in config.json, or pass a channel: `rr #roles`.',
+                );
+            }
+            source = 'reactionRoles.channelId';
+        } else {
+            target = ctx.channel;
         }
 
-        const target =
-            ctx.guild.channels.cache.get(rr.channelId) ??
-            (await ctx.guild.channels.fetch(rr.channelId).catch(() => null));
-
-        if (!target) {
-            return ctx.reply(
-                `❌ Configured channel \`${rr.channelId}\` was not found in **${ctx.guild.name}**. ` +
-                'Fix `reactionRoles.channelId` in config.json.',
-            );
-        }
         if (typeof target.send !== 'function') {
-            return ctx.reply(`❌ <#${rr.channelId}> is not a text channel I can post to.`);
+            return ctx.reply(`❌ ${target} is not a text channel I can post to.`);
         }
 
         const missing = [];
@@ -58,7 +81,7 @@ module.exports = {
             .setTitle('Pick your roles')
             .setDescription(
                 `React to this message to get or remove a role.\n\n${lines.join('\n')}\n\n` +
-                `Only this message assigns roles; reactions on other posts in ${target} are ignored.`,
+                'Only this message assigns roles; reactions on other posts are ignored.',
             );
 
         let sent;
@@ -68,7 +91,7 @@ module.exports = {
             return ctx.reply(`❌ Could not post in ${target}: ${err.message}`);
         }
 
-        store.record(sent.id);
+        store.record(sent.id, { channelId: target.id, guildId: ctx.guild.id });
 
         const failed = [];
         for (const entry of rr.roles) {
@@ -81,6 +104,6 @@ module.exports = {
             missing.length || failed.length ? '' : '☑️ All reactions applied.',
         ].filter(Boolean).join('\n');
 
-        return ctx.reply(`📌 Menu posted in ${target}: ${sent.url}\n${notes}`, { ephemeral: true });
+        return ctx.reply(`📌 Menu posted in ${target} (from ${source}): ${sent.url}\n${notes}`, { ephemeral: true });
     },
 };

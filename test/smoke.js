@@ -74,7 +74,7 @@ const { PermissionFlagsBits } = require('discord.js');
 
 await check('loadCommands registry', () => {
     const { commands, get } = loadCommands();
-    assert.ok(commands.size >= 24, `expected >=24 commands, got ${commands.size}`);
+    assert.ok(commands.size >= 35, `expected >=35 commands, got ${commands.size}`);
     assert.ok(get('play')?.name === 'play', 'play resolvable');
     assert.ok(get('next')?.name === 'skip', 'alias next -> skip');
     assert.ok(get('loop')?.name === 'repeat', 'alias loop -> repeat');
@@ -82,7 +82,18 @@ await check('loadCommands registry', () => {
     assert.ok(get('np')?.name === 'nowplaying', 'alias np -> nowplaying');
     assert.ok(get('prev')?.name === 'previous', 'alias prev -> previous');
     assert.ok(get('rm')?.name === 'remove', 'alias rm -> remove');
-    for (const name of ['nowplaying', 'shuffle', 'previous', 'remove', 'clear', 'seek']) {
+    // v3.2 aliases
+    assert.ok(get('stay')?.name === '247', 'alias stay -> 247');
+    assert.ok(get('mute')?.name === 'timeout', 'alias mute -> timeout');
+    assert.ok(get('auto')?.name === 'autoplay', 'alias auto -> autoplay');
+    assert.ok(get('lists')?.name === 'playlist', 'alias lists -> playlist');
+    assert.ok(get('reminders')?.name === 'remind', 'alias reminders -> remind');
+    assert.ok(get('dc')?.name === 'leave', 'alias dc -> leave');
+    for (const name of [
+        'nowplaying', 'shuffle', 'previous', 'remove', 'clear', 'seek',
+        'playlist', 'lyrics', 'autoplay', '247', 'leave', 'voteskip',
+        'remind', 'poll', 'stats', 'timeout', 'modlog', 'prefix',
+    ]) {
         assert.ok(commands.get(name)?.data, `${name} should be registered as a slash command too`);
     }
 });
@@ -101,7 +112,7 @@ await check('slash builders serialize', () => {
             if (option.choices) assert.ok(option.choices.length <= 25, `${json.name} has ${option.choices.length} choices`);
         }
     }
-    assert.ok(names.size >= 24, `expected >=24 slash commands, got ${names.size}`);
+    assert.ok(names.size >= 35, `expected >=35 slash commands, got ${names.size}`);
     console.log(`        slash commands: ${[...names].join(', ')}`);
 });
 
@@ -210,7 +221,14 @@ await check('feedbackStore writes into data/ and migrates the legacy log', async
     assert.match(content, /old: kept/, 'legacy feedback survived');
     assert.match(content, /new entry/);
     assert.ok(!fs.existsSync(feedbackStore.LEGACY_FILE), 'legacy file moved, not copied');
-    assert.ok(fs.existsSync(path.join(DATA_DIR, 'feedback.txt')));
+    // The backend depends on whether better-sqlite3 loaded; either way the log
+    // survives and the legacy import happens exactly once.
+    if (feedbackStore.BACKEND === 'sqlite') {
+        assert.ok(fs.existsSync(path.join(DATA_DIR, 'feedback.sqlite')), 'sqlite database created');
+        assert.ok(fs.existsSync(path.join(DATA_DIR, 'feedback.txt.imported')), 'text log imported and retired');
+    } else {
+        assert.ok(fs.existsSync(path.join(DATA_DIR, 'feedback.txt')));
+    }
 
     // Appending again must not try to migrate a second time.
     await feedbackStore.append('third entry');
@@ -428,6 +446,10 @@ await check('config.json has no dead keys', () => {
     const config = require('../config.json');
     assert.equal(typeof config.prefix, 'string');
     assert.ok(config.music.leaveOnEmptyAfterSeconds > 0);
+    assert.equal(typeof config.music.voteSkipEnabled, 'boolean', 'the skip command reads this default');
+    assert.equal(typeof config.music.autoplayByDefault, 'boolean', 'the finish handler reads this default');
+    assert.ok(Number.isFinite(config.cooldowns.default) && config.cooldowns.default >= 0, 'runCommand reads this');
+    assert.ok(Number.isFinite(config.cooldowns.play), 'play gets its own window');
     // The old emoji map was read nowhere.
     assert.equal(config.emoji, undefined, 'unused emoji map should stay deleted');
 });
@@ -492,6 +514,364 @@ await check('music.play helper exported', () => {
     assert.strictEqual(typeof music.play, 'function');
 });
 
+// --- web portal ---------------------------------------------------------------
+
+const { startPortal, isLoopback } = require('../web/portal');
+const quiet = { log: () => {}, warn: () => {}, error: () => {} };
+const form = (user, pass) => new URLSearchParams({ user, pass });
+
+await check('portal stays off without WEB_USER/WEB_PASS', async () => {
+    assert.equal(await startPortal({ client: {}, distube: {}, env: {}, port: 0, log: quiet }), null,
+        'missing env must not bind a port');
+    assert.equal(await startPortal({ client: {}, distube: {}, env: { WEB_USER: 'a' }, port: 0, log: quiet }), null,
+        'a user without a password is still disabled');
+});
+
+await check('isLoopback accepts only loopback forms', () => {
+    for (const ip of ['127.0.0.1', '127.5.6.7', '::1', '0:0:0:0:0:0:0:1', '::ffff:127.0.0.1']) {
+        assert.equal(isLoopback(ip), true, `${ip} is loopback`);
+    }
+    for (const ip of ['192.168.1.5', '10.0.0.1', '::ffff:10.0.0.1', '8.8.8.8', '127.0.0.256', '']) {
+        assert.equal(isLoopback(ip), false, `${ip} is not loopback`);
+    }
+});
+
+await check('portal login, dashboard, api, logout, throttling', async () => {
+    const fakeClient = {
+        user: { tag: 'MockBot#0001' },
+        uptime: 90_000,
+        ws: { ping: 42 },
+        guilds: {
+            cache: {
+                size: 2,
+                values: () => [{ id: 'g1', name: 'Test Guild' }, { id: 'g2', name: 'Quiet Guild' }],
+            },
+        },
+    };
+    const fakeDistube = {
+        // Only g1 has a queue: 1 playing + 2 queued, volume 80, repeat off.
+        getQueue: id => (id === 'g1' ? fakeQueue(['a', 'b', 'c']) : null),
+    };
+    const portal = await startPortal({
+        client: fakeClient,
+        distube: fakeDistube,
+        commands: new Map([['play'], ['skip']]),
+        env: { WEB_USER: 'admin', WEB_PASS: 'correct horse' },
+        port: 0, // ephemeral; isLoopback covers the rest since we fetch over 127.0.0.1
+        log: quiet,
+    });
+    assert.ok(portal, 'portal starts when both credentials are set');
+    const base = `http://127.0.0.1:${portal.port}`;
+
+    try {
+        const home = await fetch(`${base}/`, { redirect: 'manual' });
+        assert.equal(home.status, 302, 'the dashboard demands a login');
+        assert.equal(home.headers.get('location'), '/login');
+
+        const anon = await fetch(`${base}/api/status`);
+        assert.equal(anon.status, 401);
+        assert.ok(!(await anon.text()).includes('MockBot#0001'), 'no bot details leak before login');
+
+        let r = await fetch(`${base}/login`, { method: 'POST', body: form('admin', 'nope') });
+        assert.equal(r.status, 401, 'wrong password is rejected');
+        assert.ok(!r.headers.get('set-cookie'), 'a failed login grants no session');
+
+        r = await fetch(`${base}/login`, { method: 'POST', body: form('admin', 'correct horse'), redirect: 'manual' });
+        assert.equal(r.status, 302);
+        assert.equal(r.headers.get('location'), '/');
+        const cookie = r.headers.get('set-cookie').split(';')[0];
+        assert.match(cookie, /^mockbot_session=[0-9a-f]{64}$/, 'session is an opaque random cookie');
+        const authed = { headers: { cookie } };
+
+        r = await fetch(`${base}/`, authed);
+        assert.equal(r.status, 200);
+        assert.match(await r.text(), /MockBot/, 'dashboard renders for a session');
+
+        r = await fetch(`${base}/api/status`, authed);
+        assert.equal(r.status, 200);
+        const status = await r.json();
+        assert.equal(status.user.tag, 'MockBot#0001');
+        assert.equal(status.user.uptimeSeconds, 90);
+        assert.equal(status.user.wsPing, 42);
+        assert.equal(status.guilds, 2);
+        assert.equal(status.commands, 2);
+        assert.equal(status.music.length, 1, 'only the guild with a queue appears');
+        assert.equal(status.music[0].guild, 'Test Guild');
+        assert.equal(status.music[0].playing.name, 'a');
+        assert.equal(status.music[0].queued, 2);
+        assert.equal(status.music[0].volume, 80);
+        assert.equal(status.music[0].repeatMode, 'off');
+
+        await feedbackStore.append('2020-01-01T00:00:00.000Z portal: visible in the log');
+        r = await fetch(`${base}/api/feedback`, authed);
+        assert.equal(r.status, 200);
+        const fb = await r.json();
+        assert.ok(fb.lines[0].includes('portal: visible in the log'), 'newest line first');
+
+        r = await fetch(`${base}/logout`, { method: 'POST', headers: { cookie }, redirect: 'manual' });
+        assert.equal(r.status, 302);
+        assert.equal((await fetch(`${base}/api/status`, authed)).status, 401, 'logout killed the session');
+
+        for (let i = 0; i < 10; i += 1) {
+            r = await fetch(`${base}/login`, { method: 'POST', body: form('admin', 'nope') });
+            assert.equal(r.status, 401, `attempt ${i + 1} still answers on its merits`);
+        }
+        r = await fetch(`${base}/login`, { method: 'POST', body: form('admin', 'correct horse') });
+        assert.equal(r.status, 429, 'after ten misses even the right password waits');
+    } finally {
+        portal.close();
+    }
+});
+
+// --- v3.2: duration grammar -----------------------------------------------------
+
+const { parseHumanDuration, formatDurationMs } = require('../lib/duration');
+
+await check('parseHumanDuration accepts unit combinations, nothing else', () => {
+    assert.equal(parseHumanDuration('30m'), 30 * 60_000);
+    assert.equal(parseHumanDuration('2h30m'), 2 * 3600_000 + 30 * 60_000);
+    assert.equal(parseHumanDuration('3d'), 3 * 86400_000);
+    assert.equal(parseHumanDuration('1w2d'), 9 * 86400_000);
+    assert.equal(parseHumanDuration('45s'), 45_000);
+    assert.equal(parseHumanDuration('10M'), 10 * 60_000, 'case-insensitive');
+    for (const bad of ['', ' ', '10', 'abc', '1h 2h', '1 x', '0m', '1:30', '-5m', 'm']) {
+        assert.equal(parseHumanDuration(bad), null, `"${bad}" must be rejected`);
+    }
+    assert.equal(formatDurationMs(90_000), '1m 30s');
+    assert.equal(formatDurationMs(0), '0s');
+});
+
+// --- v3.2: per-guild settings ----------------------------------------------------
+
+const guildSettings = require('../lib/guildSettings');
+
+await check('guildSettings patch/get/reset persist', () => {
+    assert.equal(guildSettings.get('g-settings').prefix, null, 'default: no override');
+    assert.equal(guildSettings.get('g-settings').twentyFourSeven, false);
+    guildSettings.patch('g-settings', { prefix: '?', twentyFourSeven: true });
+    assert.equal(guildSettings.get('g-settings').prefix, '?');
+    assert.equal(guildSettings.get('g-settings').twentyFourSeven, true);
+    assert.ok(fs.existsSync(guildSettings.FILE), 'settings file written');
+    guildSettings.patch('g-settings', { prefix: null });
+    assert.equal(guildSettings.get('g-settings').prefix, null);
+    guildSettings.reset('g-settings');
+    assert.equal(guildSettings.get('g-settings').twentyFourSeven, false, 'reset wipes every override');
+});
+
+// --- v3.2: playlists -------------------------------------------------------------
+
+const playlists = require('../lib/playlistsStore');
+
+await check('playlistsStore saves, validates, replaces and removes', () => {
+    const songs = [
+        { url: 'https://youtu.be/aaaaaaaa', name: 'One', duration: 100, thumbnail: 't' },
+        'https://youtu.be/bbbbbbbb',
+        { name: 'no url', duration: 5 },
+    ];
+    const saved = playlists.save('g-pl', 'Road Trip', songs);
+    assert.ok(saved.ok, 'save accepted');
+    assert.equal(saved.playlist.songs.length, 2, 'entries without a url drop out, bare urls normalise');
+
+    assert.ok(!playlists.save('g-pl', 'Road Trip', songs).ok, 'duplicate name refused without replace');
+    assert.ok(playlists.save('g-pl', 'Road Trip', songs, { replace: true }).ok, 'replace honoured');
+    assert.ok(!playlists.save('g-pl', 'x'.repeat(40), songs).ok, 'name length validated');
+
+    const listed = playlists.list('g-pl');
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].songs, 2);
+
+    assert.ok(playlists.get('g-pl', 'road trip'), 'lookup is case-insensitive');
+    assert.ok(playlists.remove('g-pl', 'road trip'));
+    assert.equal(playlists.get('g-pl', 'road trip'), null);
+});
+
+// --- v3.2: reminders --------------------------------------------------------------
+
+const remindersLib = require('../lib/reminders');
+
+await check('reminders validate, persist, fire when due and consume', async () => {
+    const sent = [];
+    const channel = { send: async p => { sent.push(p); } };
+    const fakeClient = {
+        guilds: { cache: new Map([['g-rem', { id: 'g-rem', channels: { cache: new Map([['c1', channel]]), fetch: async () => channel } }]]) },
+        channels: { cache: new Map([['c1', channel]]) },
+        users: { fetch: async () => { throw new Error('no dm'); } },
+    };
+
+    assert.ok(!remindersLib.add({ guildId: 'g-rem', channelId: 'c1', userId: 'u1', text: 'x', at: Date.now() + 10_000 }).ok,
+        'sub-minute reminders refused');
+    assert.ok(!remindersLib.add({ guildId: 'g-rem', channelId: 'c1', userId: 'u1', text: 'x', at: Date.now() + 40 * 86400_000 }).ok,
+        'beyond 30 days refused');
+
+    const made = remindersLib.add({ guildId: 'g-rem', channelId: 'c1', userId: 'u1', text: 'stretch', at: Date.now() + 600_000 });
+    assert.ok(made.ok, 'a normal reminder is accepted');
+    assert.equal(remindersLib.listFor('g-rem', 'u1').length, 1);
+
+    const fired = await remindersLib.fireDue(fakeClient, Date.now() + 660_000); // pretend ten minutes passed
+    assert.equal(fired, 1, 'the due reminder was delivered');
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].content, /stretch/);
+    assert.match(sent[0].content, /overdue/, 'a past-due delivery says so');
+    assert.equal(remindersLib.listFor('g-rem', 'u1').length, 0, 'consumed after firing');
+
+    remindersLib.add({ guildId: 'g-rem', channelId: 'c1', userId: 'u1', text: 'second', at: Date.now() + 600_000 });
+    const second = remindersLib.listFor('g-rem', 'u1')[0];
+    assert.ok(remindersLib.cancel(second.id));
+    assert.equal(remindersLib.listFor('g-rem', 'u1').length, 0);
+});
+
+// --- v3.2: vote skip --------------------------------------------------------------
+
+const voteSkip = require('../lib/voteSkip');
+
+await check('vote skip: majority needed, exemptions immediate, stale votes die', () => {
+    const queueWith = (songId, humans) => ({
+        songs: [{ id: songId, user: { id: 'req' } }],
+        voiceChannel: {
+            id: 'vc',
+            members: { values: () => Array.from({ length: humans }, (_, i) => ({ user: { id: `h${i}`, bot: false } })) },
+        },
+    });
+    const base = { voteEnabled: true };
+
+    // A solo listener’s skip is final.
+    const solo = voteSkip.attemptSkip({ ...base, guildId: 'g-solo', userId: 'h0', isOwner: false, isRequester: false, queue: queueWith('s1', 1) });
+    assert.equal(solo.action, 'skip');
+    assert.equal(solo.reason, 'solo');
+
+    // Requester and owner skip outright even with a crowd.
+    assert.equal(voteSkip.attemptSkip({ ...base, guildId: 'g-v', userId: 'req', isOwner: false, isRequester: true, queue: queueWith('s1', 3) }).reason, 'requester');
+    assert.equal(voteSkip.attemptSkip({ ...base, guildId: 'g-v2', userId: 'x', isOwner: true, isRequester: false, queue: queueWith('s1', 4) }).reason, 'owner');
+
+    // Three listeners: one vote starts the poll, a second passes it.
+    const first = voteSkip.attemptSkip({ ...base, guildId: 'g-vote', userId: 'h1', isOwner: false, isRequester: false, queue: queueWith('s1', 3) });
+    assert.equal(first.action, 'vote');
+    assert.equal(first.votes, 1);
+    assert.equal(first.needed, 2, 'ceil(3/2)');
+
+    const dup = voteSkip.attemptSkip({ ...base, guildId: 'g-vote', userId: 'h1', isOwner: false, isRequester: false, queue: queueWith('s1', 3) });
+    assert.equal(dup.action, 'already');
+
+    const second = voteSkip.attemptSkip({ ...base, guildId: 'g-vote', userId: 'h2', isOwner: false, isRequester: false, queue: queueWith('s1', 3) });
+    assert.equal(second.action, 'skip');
+    assert.equal(second.reason, 'passed');
+
+    // A vote does not survive the song changing under it.
+    voteSkip.attemptSkip({ ...base, guildId: 'g-stale', userId: 'h1', isOwner: false, isRequester: false, queue: queueWith('sA', 3) });
+    const afterSongChange = voteSkip.attemptSkip({ ...base, guildId: 'g-stale', userId: 'h1', isOwner: false, isRequester: false, queue: queueWith('sB', 3) });
+    assert.equal(afterSongChange.votes, 1, 'the old song’s vote was discarded');
+});
+
+// --- v3.2: cooldowns --------------------------------------------------------------
+
+const cooldowns = require('../lib/cooldowns');
+
+await check('cooldowns let the first call through and block the second', () => {
+    cooldowns.__reset();
+    assert.equal(cooldowns.check('u1', 'play', 5), true);
+    assert.equal(cooldowns.check('u1', 'play', 5), false, 'second call inside the window');
+    assert.equal(cooldowns.check('u2', 'play', 5), true, 'another user unaffected');
+    assert.equal(cooldowns.check('u1', 'ping', 0), true, '0 disables');
+});
+
+// --- v3.2: autoplay ---------------------------------------------------------------
+
+const autoplayLib = require('../lib/autoplay');
+
+await check('autoplay ids, mix url and the chain/failure brakes', () => {
+    assert.equal(autoplayLib.videoIdOf('https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=1'), 'dQw4w9WgXcQ');
+    assert.equal(autoplayLib.videoIdOf('https://example.invalid/x'), null);
+    assert.equal(autoplayLib.mixUrl('abc123def'), 'https://www.youtube.com/playlist?list=RDabc123def');
+
+    const st = autoplayLib.ensure('g-auto');
+    st.last = { url: 'https://www.youtube.com/watch?v=abc123456' };
+    st.failures = autoplayLib.MAX_FAILURES;
+    assert.equal(autoplayLib.canContinue('g-auto'), false, 'failures pause autoplay for the session');
+    st.failures = 0;
+    assert.equal(autoplayLib.canContinue('g-auto'), true);
+
+    autoplayLib.recordPlay('g-auto', { url: 'x', auto: true });
+    assert.equal(autoplayLib.ensure('g-auto').chain, 1);
+    autoplayLib.recordPlay('g-auto', { url: 'y' });
+    assert.equal(autoplayLib.ensure('g-auto').chain, 0, 'a human-picked song resets the chain');
+});
+
+// --- v3.2: button dispatch ---------------------------------------------------------
+
+const components = require('../lib/components');
+
+await check('component dispatch pages the queue and strips stale controls', async () => {
+    cooldowns.__reset();
+    const queue = fakeQueue(Array.from({ length: 16 }, (_, i) => `song ${i}`), { id: 'g-btn' });
+    const distube = { getQueue: () => queue };
+    const updates = [];
+    const interaction = {
+        customId: 'mb:qp:2',
+        guild: { id: 'g-btn', name: 'G' },
+        user: { id: 'u1', bot: false },
+        member: { voice: { channelId: 'vc' } },
+        update: async payload => { updates.push(payload); return 'updated'; },
+        reply: async () => 'replied',
+    };
+    await components.dispatch(interaction, { distube, config: {} });
+    assert.equal(updates.length, 1, 'the queue paging updated the message');
+    assert.ok(Array.isArray(updates[0].components), 'new page buttons sent');
+
+    let outcome = null;
+    const unknown = {
+        customId: 'mb:nosuchthing',
+        guild: { id: 'g' }, user: { id: 'u2' }, member: {},
+        update: async () => { outcome = 'emptied'; },
+        reply: async () => { outcome = 'replied'; },
+    };
+    await components.dispatch(unknown, { distube, config: {} });
+    assert.equal(outcome, 'emptied', 'unknown customIds quietly lose their buttons');
+});
+
+// --- v3.2: reaction-roles store v2 ---------------------------------------------------
+
+await check('reaction-roles store v2 records menus with metadata and migrates v1', () => {
+    store.record('menu-v2', { channelId: 'chan-v2', guildId: 'guild-v2' });
+    assert.ok(store.isManaged('menu-v2'));
+
+    const migrated = store.parse('{"messageIds":["old-a","old-b"]}');
+    assert.deepEqual(migrated, [
+        { messageId: 'old-a', channelId: null, guildId: null },
+        { messageId: 'old-b', channelId: null, guildId: null },
+    ], 'v1 ids become per-message records');
+
+    const kept = store.parse('{"menus":[{"messageId":"c","channelId":"d","guildId":"e"}]}');
+    assert.equal(kept[0].channelId, 'd');
+
+    assert.deepEqual(store.parse('nonsense'), [], 'a corrupt file degrades to no menus');
+});
+
+// --- v3.2: 24/7 parks the idle watcher ----------------------------------------------
+
+await check('voiceIdle disarms when 24/7 mode is on for the guild', () => {
+    const { EventEmitter } = require('node:events');
+    const client = new EventEmitter();
+    const queue = {
+        id: 'g-247',
+        textChannel: { send: async () => {} },
+        stop: async () => {},
+        voiceChannel: { id: 'vc', name: 'Music', members: { values: () => [{ user: { bot: true } }] } },
+    };
+    const distube = { getQueue: () => queue, on: () => {} };
+    const idle = setupVoiceIdle(client, { distube, config: { music: { leaveOnEmptyAfterSeconds: 5 } } });
+
+    guildSettings.patch('g-247', { twentyFourSeven: true });
+    client.emit('voiceStateUpdate', { channelId: 'vc' }, { guild: { id: 'g-247' }, channelId: null });
+    assert.equal(idle.timers.size, 0, '24/7 mode keeps the timer disarmed');
+
+    guildSettings.reset('g-247');
+    client.emit('voiceStateUpdate', { channelId: 'vc' }, { guild: { id: 'g-247' }, channelId: null });
+    assert.equal(idle.timers.size, 1, 'with 24/7 off the watcher arms again');
+    idle.disarm('g-247');
+});
+
+    // Windows refuses to delete a directory containing an open sqlite file.
+    feedbackStore.close();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     console.log(failures === 0 ? '\nAll smoke tests passed.' : `\n${failures} smoke test(s) FAILED.`);
     process.exit(failures === 0 ? 0 : 1);

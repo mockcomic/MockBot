@@ -1,4 +1,5 @@
 const { Events } = require('discord.js');
+const guildSettings = require('../lib/guildSettings');
 
 /**
  * Leave a voice channel nobody is listening in.
@@ -56,6 +57,9 @@ module.exports = function setupVoiceIdle(client, { distube, config } = {}) {
 
             const queue = distube.getQueue(guildId);
             if (!queue) return void disarm(guildId);
+
+            // 24/7 mode parks the watcher entirely (`247` command).
+            if (guildSettings.get(guildId).twentyFourSeven) return void disarm(guildId);
 
             const channel = queue.voiceChannel;
             if (!channel) return void disarm(guildId);

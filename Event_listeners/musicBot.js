@@ -1,6 +1,9 @@
 const { EmbedBuilder } = require('discord.js');
 const { COLOR, songLink, statusLine } = require('../lib/musicFormat');
 const { clip } = require('../lib/respond');
+const { controlRow } = require('../lib/musicUi');
+const autoplay = require('../lib/autoplay');
+const guildSettings = require('../lib/guildSettings');
 
 function send(queue, payload) {
     queue.textChannel?.send(payload).catch(() => {});
@@ -10,10 +13,19 @@ function send(queue, payload) {
  * Register DisTube v5 events. Signatures are queue-based now:
  *   playSong(queue, song), addSong(queue, song), addList(queue, playlist),
  *   finish(queue), error(error, queue, song?)
+ *
+ * The `finish` branch decides what "the queue ended" actually means for this
+ * guild, in order of priority:
+ *   1. autoplay on  → queue the next song from the radio mix and stay put
+ *   2. 24/7 on      → nothing, just say the queue finished (stay connected)
+ *   3. otherwise    → stop(): clear the queue and disconnect (as before v3.2)
  */
-module.exports = function setupMusicEvents(distube) {
+module.exports = function setupMusicEvents(distube, deps = {}) {
+    const config = deps.config ?? {};
+
     distube
-        .on('playSong', (queue, song) =>
+        .on('playSong', (queue, song) => {
+            autoplay.recordPlay(queue.id, song);
             send(queue, {
                 embeds: [
                     new EmbedBuilder()
@@ -24,8 +36,9 @@ module.exports = function setupMusicEvents(distube) {
                         )
                         .setThumbnail(song.thumbnail ?? null),
                 ],
-            }),
-        )
+                components: [controlRow(queue)],
+            });
+        })
         .on('addSong', (queue, song) =>
             send(queue, {
                 embeds: [
@@ -49,7 +62,38 @@ module.exports = function setupMusicEvents(distube) {
                 ],
             }),
         )
-        .on('finish', queue => {
+        .on('finish', async queue => {
+            const guildId = queue.id;
+
+            if (autoplay.enabledFor(guildId, config) && autoplay.canContinue(guildId)) {
+                const next = await autoplay.nextSong(distube, guildId, {
+                    member: null,
+                    textChannel: queue.textChannel,
+                });
+                if (next) {
+                    try {
+                        await distube.play(queue.voiceChannel, next, {
+                            member: null,
+                            textChannel: queue.textChannel,
+                        });
+                        return; // playSong announces it with the controls
+                    } catch (err) {
+                        console.error('[autoplay]', err);
+                    }
+                }
+            }
+
+            if (guildSettings.get(guildId).twentyFourSeven) {
+                send(queue, {
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(COLOR.info)
+                            .setDescription('⏹️ Queue finished — staying connected (24/7 mode). `leave` disconnects me.'),
+                    ],
+                });
+                return;
+            }
+
             send(queue, {
                 embeds: [
                     new EmbedBuilder()
@@ -59,7 +103,7 @@ module.exports = function setupMusicEvents(distube) {
             });
             // DisTube removes the queue on its own but stays connected; stop()
             // is what actually disconnects.
-            queue.stop().catch(() => {});
+            await queue.stop().catch(() => {});
         })
         .on('noRelated', (queue, error) =>
             // Signature is (queue, error) — the second argument is a DisTubeError.

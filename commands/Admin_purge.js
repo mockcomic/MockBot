@@ -1,10 +1,12 @@
 const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const modlog = require('../lib/modlog');
 
 module.exports = {
     name: 'purge',
     adminOnly: PermissionFlagsBits.ManageMessages,
     description: 'Delete up to 100 recent messages',
     usage: 'purge <1-100>',
+    category: 'staff',
     data: new SlashCommandBuilder()
         .setName('purge')
         .setDescription('Delete up to 100 recent messages')
@@ -21,6 +23,12 @@ module.exports = {
         try {
             // filterOld=true skips messages older than 14 days (Discord API limit).
             const deleted = await ctx.channel.bulkDelete(amount, true);
+            await modlog.log(ctx.guild, {
+                action: `🗑️ Purged ${deleted.size} message(s) in #${ctx.channel.name ?? ctx.channel.id}`,
+                moderator: ctx.member?.toString() ?? `<@${ctx.user.id}>`,
+                target: 'messages',
+                color: 0xf1c40f,
+            });
             return ctx.reply(`🗑️ Deleted ${deleted.size} message(s). Note: Discord cannot bulk-delete messages older than 14 days.`);
         } catch (err) {
             console.error('[purge]', err);

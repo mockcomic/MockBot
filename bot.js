@@ -5,11 +5,17 @@ const { YtDlpPluginPatched } = require('./lib/YtDlpPluginPatched');
 const config = require('./config.json');
 const { loadCommands } = require('./commands_Handler');
 const Context = require('./lib/Context');
-const { canRun } = require('./lib/access');
+const { canRun, isOwner } = require('./lib/access');
 const { clip } = require('./lib/respond');
+const guildSettings = require('./lib/guildSettings');
+const cooldowns = require('./lib/cooldowns');
+const components = require('./lib/components');
+const reminders = require('./lib/reminders');
+require('./lib/musicUi'); // registers the mb: control handlers with components.js
 const setupMusicEvents = require('./Event_listeners/musicBot');
 const setupReactionRoles = require('./Event_listeners/reactionRoles');
 const setupVoiceIdle = require('./Event_listeners/voiceIdle');
+const { startPortal } = require('./web/portal');
 
 const REQUIRED_NODE = 22;
 
@@ -71,9 +77,9 @@ const distube = new DisTube(client, {
 
 const { commands, get: getCommand } = loadCommands();
 
-setupMusicEvents(distube);
+setupMusicEvents(distube, { config });
 setupReactionRoles(client, config);
-setupVoiceIdle(client, { distube, config });
+const idleWatcher = setupVoiceIdle(client, { distube, config });
 
 client.once(Events.ClientReady, async readyClient => {
     console.log(`Logged in as ${readyClient.user.tag}`);
@@ -102,12 +108,24 @@ client.once(Events.ClientReady, async readyClient => {
     if (!process.env.OWNER) {
         console.warn('[boot] OWNER is not set, so purge/rr/reboot/update are unreachable.');
     }
+
+    // Deliver reminders that came due while the bot was down and arm the timer.
+    reminders.start(readyClient);
+
+    // Optional localhost admin page (WEB_USER/WEB_PASS). It must never be the
+    // reason the bot is dead, so a failed bind only costs a log line.
+    try {
+        await startPortal({ client, distube, commands });
+    } catch (err) {
+        console.error('[web] portal failed to start', err);
+    }
 });
 
 client.on(Events.MessageCreate, async message => {
     if (message.author.bot || !message.guild) return;
 
-    const prefix = config.prefix;
+    // Per-guild override first (the `prefix` command), global config as fallback.
+    const prefix = guildSettings.get(message.guild.id).prefix ?? config.prefix;
     if (!message.content.startsWith(prefix)) return;
 
     const parts = message.content.slice(prefix.length).trim().split(/\s+/);
@@ -119,12 +137,19 @@ client.on(Events.MessageCreate, async message => {
 
     await runCommand(cmd, new Context({
         client, distube, config, commands,
+        voiceIdle: idleWatcher,
         message,
         args: parts,
     }));
 });
 
 client.on(Events.InteractionCreate, async interaction => {
+    // Buttons (player controls, queue paging) go through the shared dispatcher.
+    if (interaction.isButton()) {
+        await components.dispatch(interaction, { client, distube, config });
+        return;
+    }
+
     if (!interaction.isChatInputCommand()) return;
 
     const cmd = commands.get(interaction.commandName);
@@ -138,12 +163,13 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 
     // Map slash options onto the same flat args array prefix commands use.
-    // Every command here takes at most one option, so order is unambiguous;
-    // commands that need more should read ctx.option(name) instead.
+    // Declaration order is kept, so multi-option commands receive their
+    // arguments in the order their SlashCommandBuilder lists them.
     const args = interaction.options.data.map(opt => String(opt.value));
 
     await runCommand(cmd, new Context({
         client, distube, config, commands,
+        voiceIdle: idleWatcher,
         interaction,
         args,
     }));
@@ -151,6 +177,13 @@ client.on(Events.InteractionCreate, async interaction => {
 
 async function runCommand(cmd, ctx) {
     try {
+        // Spam brake before anything else runs (owner exempt). Heavy commands
+        // like play override the default in config.cooldowns.
+        const seconds = Number(config.cooldowns?.[cmd.name] ?? config.cooldowns?.default ?? 0);
+        if (seconds > 0 && !isOwner(ctx.user?.id) && !cooldowns.check(ctx.user?.id, cmd.name, seconds)) {
+            return ctx.reply(`⏳ Please wait ${seconds}s before using \`${cmd.name}\` again.`, { ephemeral: true });
+        }
+
         const access = await canRun(cmd, ctx);
         if (!access.ok) {
             return ctx.reply(access.reason, { ephemeral: true });

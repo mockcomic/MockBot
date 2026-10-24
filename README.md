@@ -15,7 +15,7 @@ Raspberry Pi 4.
   (Developer Portal → your application → Bot → Privileged Gateway Intents).
 - Invited with the `bot` and `applications.commands` scopes and at least:
   Send Messages, Manage Messages, Read Message History, Embed Links, Add Reactions,
-  Connect, Speak.
+  Connect, Speak. For `timeout`: Moderate Members; for `modlog`/`prefix`: Manage Server.
 - For reaction roles: the bot's highest role must sit **above** every role it assigns.
 
 ## Setup
@@ -28,6 +28,8 @@ Raspberry Pi 4.
    | `TOKEN` | Discord bot token (required) |
    | `OWNER` | Your Discord user ID — unlocks owner-only commands and lets you control playback from anywhere |
    | `MOCKBOT_DATA_DIR` | Optional: where the feedback log and menu ids live (default `./data`) |
+   | `WEB_USER` + `WEB_PASS` | Optional: enables the localhost web portal (see [Web portal](#web-portal)) |
+   | `WEB_PORT` | Optional: portal port (default `8787`) |
 
 3. `npm start` (or `npm run dev` for auto-restart with nodemon).
 
@@ -43,6 +45,26 @@ npm test
 This loads every module, serializes all slash builders, and exercises the queue
 maths, reply-safety helpers, data storage and listeners offline.
 
+## Web portal (optional)
+
+Set `WEB_USER` and `WEB_PASS` in `.env` and the bot also serves a small
+read-only admin page at `http://127.0.0.1:8787/` (change with `WEB_PORT`).
+It shows login-protected status (tag, uptime, gateway ping, guild/command
+counts), per-guild music state (now playing, requester, volume, repeat, queue
+length) and the feedback log.
+
+- **Localhost only.** The server binds to `127.0.0.1`, so opening the port on a
+  remote machine gets connection-refused; there is no reverse-proxy mode and no
+  second listener.
+- **Read-only.** Everything still happens in Discord — the portal reports, it
+  does not control.
+- A login session lives in memory for 12 hours (refreshed as you use it) and
+  dies with the bot process; sign in again after a restart. Failed logins are
+  throttled to 10 per 5 minutes.
+- Without the two variables the portal is off and boot logs
+  `WEB_USER/WEB_PASS not set`; if the port is taken, boot logs the bind error
+  and the bot keeps running without the page.
+
 ## Commands
 
 `🔒` marks commands restricted to server staff or the bot owner; `help` hides them
@@ -53,12 +75,13 @@ from people who cannot run them.
 | Command | Aliases | Notes |
 |---|---|---|
 | `play <url \| search>` | `p` | Plain text searches YouTube; `watch?v=…&list=…` queues the single video |
-| `skip` | `next`, `s` | |
+| `skip` | `next`, `s` | Instant for owner/requester/solo listener; otherwise a listener-majority vote (`voteskip` toggles) |
 | `previous` | `prev`, `back` | Walks the saved song history |
 | `stop` | | Clears the queue and disconnects |
+| `leave` | `disconnect`, `dc` | Disconnect even in 24/7 mode |
 | `pause` | `resume`, `unpause` | One toggle |
-| `queue [page]` | `q` | 10 rows per page; row 1 (`▶`) is the playing song |
-| `nowplaying` | `np`, `playing` | Progress bar, requester, next song |
+| `queue [page]` | `q` | 10 rows per page; row 1 (`▶`) is the playing song; ◀ ▶ buttons page |
+| `nowplaying` | `np`, `playing` | Progress bar, requester, next song — with ⏸ ⏭ 🔀 buttons |
 | `volume <0-150>` | `vol`, `v` | |
 | `jump <position>` | | Positions match `queue`; `2` = next song, `-1` = previous |
 | `repeat <off\|song\|queue>` | `loop` | |
@@ -67,10 +90,21 @@ from people who cannot run them.
 | `seek <seconds\|mm:ss>` | | `seek 90`, `seek 1:30`; refused on live streams |
 | `shuffle` | `mix` | Keeps the playing song, shuffles the rest |
 | `filter <name\|list\|clear>` | | See `filter list` for the available set |
+| `playlist <save\|load\|list\|show\|delete> [name]` | `lists` | Saved queues: 200 songs × 20 lists per server; loads with no yt-dlp lookups (`save <name> replace` overwrites) |
+| `lyrics [search]` | | Genius lyrics for the playing song or any search (optional `GENIUS_TOKEN`) |
+| `autoplay <on\|off\|status>` | `auto` | When the list ends, queue the first other song of the YouTube radio mix |
+| `247` | `stay` | Keep the voice connection when idle; `leave` is the manual exit |
+| `voteskip <on\|off\|status>` | | Toggle the listener-majority skip rule for this server |
 
-**Utility** — `help`, `ping`, `myid`, `feedback <text>`
+**Utility** — `help`, `ping`, `myid`, `feedback <text>`, `stats`,
+`poll [duration] <question> [ | option | option …]`,
+`remind <when> <text>` / `remind list` / `remind cancel <id>` (durations like
+`30m`, `2h30m`, `3d`; persisted, and delivered — marked *overdue* — even after
+a restart)
 
-**Staff / owner** — `purge <1-100>` 🔒(Manage Messages), `rr` 🔒(Manage Roles),
+**Staff / owner** — `purge <1-100>` 🔒(Manage Messages), `rr [#channel]` 🔒(Manage Roles),
+`timeout <@member> <duration|off> [reason]` 🔒(Moderate Members),
+`modlog [#channel|off]` 🔒(Manage Server), `prefix [set <new>|reset]` 🔒(Manage Server),
 `feedbacklist` 🔒(owner), `reboot` 🔒(owner), `update` 🔒(owner)
 
 ## Configuration (`config.json`)
@@ -78,7 +112,12 @@ from people who cannot run them.
 ```jsonc
 {
     "prefix": "!",
-    "music": { "leaveOnEmptyAfterSeconds": 90 },
+    "cooldowns": { "default": 3, "play": 5 },
+    "music": {
+        "leaveOnEmptyAfterSeconds": 90,
+        "voteSkipEnabled": true,
+        "autoplayByDefault": false
+    },
     "reactionRoles": {
         "enabled": true,
         "channelId": "845386774327197726",
@@ -87,25 +126,43 @@ from people who cannot run them.
 }
 ```
 
+- `cooldowns` — per-user command spam brake, in seconds; `default` applies to
+  every command (0 disables) and `play` overrides it because resolution hits
+  the network. The bot owner is exempt.
+- `music.voteSkipEnabled` / `music.autoplayByDefault` — starting values for
+  the per-server `voteskip` / `autoplay` toggles (a server setting, once
+  changed, wins over these).
 - `music.leaveOnEmptyAfterSeconds` — how long to wait before leaving a voice
   channel that has no human listeners. DisTube v5 dropped its own
-  `leaveOnEmpty`, so this is the replacement. Set to `0` to disable.
-- `reactionRoles.channelId` — where `rr` posts its menu. Reactions only count on
-  messages this bot posted there, so someone else's `1️⃣` poll cannot hand out roles.
+  `leaveOnEmpty`, so this is the replacement. Set to `0` to disable, or turn
+  the watcher off per server with `247`.
+- `reactionRoles.channelId` — default channel for `rr`; the command also
+  accepts an explicit channel (`rr #roles`) and works in any guild. Reactions
+  only count on menu messages this bot posted, so someone else's `1️⃣` poll
+  cannot hand out roles.
 - `reactionRoles.roles[].roleId` — optional but recommended: pinning an ID survives a
   role rename. `name` is the fallback, and `rr` prints the resolved IDs so you can paste them in.
 - Emojis may be unicode or custom (`name:id`).
+
+Per-server overrides (prefix, 24/7, autoplay, vote skip, modlog channel) live
+in `data/guilds.json`; `prefix set`, `247`, `autoplay`, `voteskip` and
+`modlog` write them, and slash commands are never affected by the prefix.
 
 ## Runtime data
 
 The bot writes to `./data/` (gitignored) rather than the repository root, so a git
 operation can never overwrite it:
 
-- `data/feedback.txt` — one timestamped line per `feedback` command
-- `data/reaction-roles.json` — ids of the menus the bot has posted
+- `data/feedback.sqlite` — feedback records (falls back to `data/feedback.txt`
+  when better-sqlite3 could not be installed; a text log is imported once and
+  kept as `feedback.txt.imported`)
+- `data/reaction-roles.json` — menus the bot has posted (per message: channel, guild)
+- `data/guilds.json` — per-server overrides (prefix, 24/7, autoplay, vote skip, modlog)
+- `data/playlists.json` — `playlist save` snapshots
+- `data/reminders.json` — pending `remind` entries with absolute timestamps
 
 A `feedback.txt` left in the repo root by an older install is moved into `data/`
-automatically on the first new feedback entry.
+(and into the database when SQLite is active) automatically.
 
 ## Good to know
 
@@ -120,6 +177,28 @@ automatically on the first new feedback entry.
 - Playlist links resolve at most the first **100** entries, and each yt-dlp call is
   bounded (30 s for a stream lookup, 60 s for playlist/search resolution) with an
   8 MB output cap, so a stalled lookup reports an error instead of hanging the queue.
+- **Player buttons** (⏸ ⏭ 🔀 and the queue ◀ ▶) obey the same rules as the
+  commands: in the bot's voice channel, owner exempt — the page arrows are
+  view-only and work for everyone. A ⏭ click routes through the vote logic, so
+  the buttons cannot bypass a vote. Stale controls on old messages answer with
+  a short ephemeral note and lose their buttons.
+- **Vote skip** needs a majority of the *humans* in the voice channel
+  (deafened people count; bots don't). The owner and the person who requested
+  the song skip without a vote, and so does a solo listener. A running vote
+  dies when the song changes.
+- **Autoplay** fetches YouTube's radio mix (`RD<videoId>`) for the last song
+  and queues the first entry that is *not* that song. Two brakes: 3
+  consecutive failures pause autoplay for the session (a flaky network should
+  not spam the channel), and it caps at 50 songs in a row without user input.
+  Live streams are never used as a seed.
+- **Reminders** are persisted with absolute timestamps and re-armed on boot,
+  so `update` + `reboot` never loses them; what came due while the bot was
+  down is delivered immediately, marked *overdue*. A reminder whose channel
+  vanished falls back to a DM.
+- **Polls** count votes with an in-memory collector — a restart while a poll
+  is open leaves the message without its result line.
+- **Cooldowns** are in-memory per user and command (a restart resets them);
+  see `config.json` `cooldowns`.
 - Replies never ping `@everyone` or roles on the bot's behalf: song titles, yt-dlp
   output and stored feedback are all remote text.
 - Replies that can carry remote or command output are truncated at Discord's limits
@@ -134,18 +213,30 @@ automatically on the first new feedback entry.
   check that the Pi has outbound HTTPS.
 - **`ffmpeg not found`** — `ffmpeg-static` is bundled; otherwise put ffmpeg on PATH.
 - **`TOKEN is missing` / `Login failed`** — check your `.env` file.
+- **Web portal did not start** — both `WEB_USER` and `WEB_PASS` must be set, and
+  `WEB_PORT` (default 8787) must be free; the boot log says which of the two it
+  was.
 - **`rr` says the channel was not found** — `reactionRoles.channelId` points at a
   channel this guild does not have.
 - **Roles are not assigned** — the bot's highest role is below the target role, or
   the configured name no longer matches (switch that entry to `roleId`). The bot
   logs one line per guild the first time it notices.
+- **"That control no longer works"** — the buttons live on the old embed; the
+  queue moved on. Run `nowplaying` (or `queue`) again.
+- **`timeout` refuses a member** — Discord requires your bot's highest role
+  above the target's (owners can never be timed out), and 28 days is the max.
+- **`lyrics` finds nothing** — Genius search is title-matching; help it with
+  `lyrics <artist> <song>`. A `GENIUS_TOKEN` in `.env` reduces rate-limit
+  rejections.
+- **A `⏳ Please wait` reply appears** — that is the per-user cooldown
+  (`config.json` `cooldowns`); it is a spam brake, not an error.
 - **"You must be in … to use this command"** — the music controls require you to be
   in the bot's voice channel; the `OWNER` account is exempt.
 
 ## Contributions and Feedback
 
 Fork away and open pull requests — contributions are welcome. If you would rather
-just use the bot, the `feedback` command lands in `data/feedback.txt` for the owner
-(and `feedbacklist` reads it back).
+just use the bot, the `feedback` command lands in the feedback store under
+`data/` for the owner (and `feedbacklist` reads it back).
 
 Let's enhance our Discord servers with the entertaining and useful MockBot!

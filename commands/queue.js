@@ -1,12 +1,17 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder } = require('discord.js');
 const { requireQueue, isBlocked } = require('../lib/musicGuards');
-const { COLOR, queuePage } = require('../lib/musicFormat');
+const { queuePayload } = require('../lib/musicUi');
 
+/**
+ * The queue listing, 10 rows per page, with ◀ ▶ buttons (lib/musicUi.js
+ * handles the paging clicks — same row numbering `jump` accepts).
+ */
 module.exports = {
     name: 'queue',
     aliases: ['q'],
     description: 'Show the current music queue (10 songs per page)',
     usage: 'queue [page]',
+    category: 'music',
     data: new SlashCommandBuilder()
         .setName('queue')
         .setDescription('Show the current music queue')
@@ -19,14 +24,6 @@ module.exports = {
         if (isBlocked(guard)) return ctx.reply(guard.reply);
 
         const page = Number.parseInt(ctx.args[0], 10);
-        const view = queuePage(guard.queue, Number.isNaN(page) ? 1 : page);
-
-        const embed = new EmbedBuilder()
-            .setColor(COLOR.accent)
-            .setTitle(`📄 Queue for ${ctx.guild.name}`)
-            .setDescription(view.description)
-            .setFooter({ text: view.footerText });
-
-        return ctx.reply({ embeds: [embed] });
+        return ctx.reply(queuePayload(guard.queue, Number.isNaN(page) ? 1 : page, ctx.guild.name));
     },
 };
