@@ -660,7 +660,14 @@ await check('portal login, dashboard, api, logout, throttling', async () => {
 
         r = await fetch(`${base}/`, authed);
         assert.equal(r.status, 200);
-        assert.match(await r.text(), /MockBot/, 'dashboard renders for a session');
+        const dash = await r.text();
+        assert.match(dash, /MockBot/, 'dashboard renders for a session');
+        assert.match(dash, /id="toast"[^>]*role="status"[^>]*aria-live="polite"/, 'errors are announced to screen readers');
+        assert.match(dash, /<nav role="tablist">/, 'tabs expose tab semantics');
+        assert.match(dash, /:focus-visible/, 'keyboard focus is a designed state');
+        assert.match(dash, /aria-selected="true"/, 'the active tab is announced');
+        assert.match(dash, /<link rel="icon" href="data:image\/png;base64,/, 'brand favicon survives CSP');
+        assert.match(dash, /overflow-wrap:anywhere/, 'narrow screens never scroll sideways');
 
         r = await fetch(`${base}/api/status`, authed);
         assert.equal(r.status, 200);
@@ -799,6 +806,17 @@ await check('portal admin API: csrf, settings, toggles, guild detail, audit', as
         assert.equal(guildSettings.get('g-admin').prefix, '>');
         assert.equal(guildSettings.get('g-admin').twentyFourSeven, true);
         assert.equal(guildSettings.get('g-admin').bogusKey, undefined, 'unknown patch keys never land');
+
+        // Silent truncation is now a loud truncation: sliced input comes back
+        // as a note in the response so the UI can tell the operator.
+        rr = await api('/api/guild/settings', { guildId: 'g-admin', patch: { prefix: '!play1', autoRoleIds: '111111111111,222222222222,333333333333,444444444444,555555555555,666666666666' } });
+        assert.ok(rr.ok);
+        assert.equal(guildSettings.get('g-admin').prefix, '!play', 'prefix keeps only 5 chars');
+        assert.equal(guildSettings.get('g-admin').autoRoleIds.length, 5, 'only 5 auto-role ids kept');
+        assert.ok((rr.notes || []).some(n => /prefix kept first 5/.test(n)), 'the prefix slice is reported');
+        assert.ok((rr.notes || []).some(n => /auto-role ids kept first 5/.test(n)), 'the id slice is reported');
+        rr = await api('/api/guild/reset', { guildId: 'g-admin' });
+        assert.ok(/settings, command overrides and usage stats/.test(rr.message), 'reset names its full blast radius');
 
         // Guild detail lists toggles, usage and derived info.
         usage.record('g-admin', 'play');

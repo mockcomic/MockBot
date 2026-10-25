@@ -161,6 +161,21 @@ function esc(text) {
         .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 }
 
+// The only brand pixel the CSP allows: img-src admits data:, so ship
+// lib/logo.png inline instead of the empty `data:,` placeholder. Read once;
+// a missing/unreadable logo falls back to the silent placeholder.
+let FAVICON;
+function faviconHref() {
+    if (FAVICON === undefined) {
+        try {
+            FAVICON = 'data:image/png;base64,' + fs.readFileSync(__dirname + '/../lib/logo.png').toString('base64');
+        } catch {
+            FAVICON = 'data:,';
+        }
+    }
+    return FAVICON;
+}
+
 function loginPage(error, csrfField) {
     return `<!doctype html>
 <html lang="en">
@@ -168,11 +183,13 @@ function loginPage(error, csrfField) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<link rel="icon" href="data:,">
+<link rel="icon" href="${faviconHref()}">
 <title>MockBot admin — sign in</title>
 <style>
 body{font:15px/1.5 system-ui,sans-serif;background:#111418;color:#e6e8ea;display:grid;place-items:center;min-height:100vh;margin:0}
-main{background:#1b2026;border:1px solid #2c333b;border-radius:10px;padding:28px 32px;width:min(320px,90vw)}
+main{box-sizing:border-box;background:#1b2026;border:1px solid #2c333b;border-radius:10px;padding:28px 32px;width:min(320px,92vw)}
+:focus-visible{outline:2px solid #8ea1ff;outline-offset:2px}
+@media (max-width:400px){main{padding:20px 18px}}
 h1{font-size:17px;margin:0 0 18px}
 label{display:block;font-size:13px;color:#9aa4ae;margin-bottom:4px}
 input{box-sizing:border-box;width:100%;margin-bottom:12px;padding:8px 10px;border-radius:6px;border:1px solid #2c333b;background:#111418;color:#e6e8ea}
@@ -204,10 +221,11 @@ h1{font-size:17px;margin:0}
 nav{display:flex;gap:6px;max-width:980px;margin:14px auto 18px;padding:0 24px;flex-wrap:wrap}
 nav button{padding:7px 14px;border:1px solid #2c333b;border-radius:999px;background:#1b2026;color:#c7ccd1;font:inherit;cursor:pointer}
 nav button.on{background:#5865f2;border-color:#5865f2;color:#fff}
-main{display:grid;gap:14px;max-width:980px;margin:0 auto;padding:0 24px}
+main{display:grid;gap:14px;max-width:980px;margin:0 auto;padding:0 24px;overflow-wrap:anywhere}
 section{background:#1b2026;border:1px solid #2c333b;border-radius:10px;padding:16px 18px}
-h2{font-size:14px;margin:0 0 10px;color:#9aa4ae;text-transform:uppercase;letter-spacing:.04em}
-h3{font-size:14px;margin:16px 0 6px;color:#9aa4ae}
+:focus-visible{outline:2px solid #8ea1ff;outline-offset:2px}
+h2{font-size:12px;margin:0 0 10px;color:#9aa4ae;text-transform:uppercase;letter-spacing:.08em}
+h3{font-size:15px;margin:16px 0 6px;color:#c7ccd1}
 dl{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0}
 dt{color:#9aa4ae}dd{margin:0}
 ul,ol{margin:0;padding-left:20px}
@@ -232,8 +250,10 @@ label.sw{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size
 .card{border:1px solid #2c333b;border-radius:8px;padding:10px 12px;background:#171b20;cursor:pointer}
 .card.on{border-color:#5865f2}
 pre{background:#111418;border:1px solid #2c333b;border-radius:6px;padding:10px;overflow:auto;font-size:12px}
-.toast{position:fixed;bottom:18px;right:18px;background:#5865f2;color:#fff;padding:10px 16px;border-radius:8px;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast{position:fixed;bottom:18px;right:18px;max-width:70vw;background:#5865f2;color:#fff;padding:10px 16px;border-radius:8px;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.show{opacity:1}
+.toast.error{background:#4d2a2a;color:#f2a3a3}
+.banner{display:block;padding:8px 12px;border-radius:8px;background:#4d2a2a;color:#f2a3a3;font-size:14px}
 `;
 
 const DASHBOARD_JS = String.raw`
@@ -247,10 +267,18 @@ function el(tag, text, cls) {
     return n;
 }
 function clear(n) { n.textContent = ''; return n; }
-function toast(msg) {
-    var t = $('toast'); t.textContent = msg; t.classList.add('show');
-    setTimeout(function () { t.classList.remove('show'); }, 2500);
+var toastTimer = null;
+function toast(msg, isErr) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.classList.toggle('error', Boolean(isErr));
+    t.classList.add('show');
+    if (toastTimer) clearTimeout(toastTimer);
+    // Successes fade; errors stay on screen until the next action — a
+    // 2.5-second failure notice nobody can re-read is not feedback.
+    if (!isErr) toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2500);
 }
+function toastError(e) { toast(String(e && e.message ? e.message : e), true); }
 async function get(path) {
     var r = await fetch(path, { cache: 'no-store' });
     if (r.status === 401) { window.location = '/login'; throw new Error('signed out'); }
@@ -266,8 +294,21 @@ async function post(path, body) {
     if (r.status === 401) { window.location = '/login'; throw new Error('signed out'); }
     var data = await r.json().catch(function () { return { ok: r.ok }; });
     if (!r.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + r.status));
-    toast(data.message || 'saved');
+    if (Array.isArray(data.notes) && data.notes.length) toast(data.message + ' — ' + data.notes.join('; '));
+    else toast(data.message || 'saved');
     return data;
+}
+// Fire-once guard for mutation buttons: a double-click on 'skip' must skip
+// one song, not two. The button re-enables when the request settles.
+function once(btn, fn) {
+    btn.addEventListener('click', function () {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        Promise.resolve()
+            .then(fn)
+            .catch(toastError)
+            .finally(function () { btn.disabled = false; });
+    });
 }
 function fmtUptime(total) {
     var d = Math.floor(total / 86400), h = Math.floor((total % 86400) / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
@@ -283,18 +324,39 @@ var current = { tab: 'overview', guildId: null, guilds: null };
 
 var TABS = ['overview', 'servers', 'commands', 'settings', 'feedback', 'audit'];
 function showTab(name) {
+    if (TABS.indexOf(name) === -1) name = 'overview';
     current.tab = name;
     TABS.forEach(function (t) {
         var sec = $('tab-' + t); if (sec) sec.style.display = t === name ? '' : 'none';
-        var nav = $('nav-' + t); if (nav) nav.className = t === name ? 'on' : '';
+        var nav = $('nav-' + t);
+        if (nav) {
+            nav.className = t === name ? 'on' : '';
+            nav.setAttribute('aria-selected', t === name ? 'true' : 'false');
+            nav.setAttribute('tabindex', t === name ? '0' : '-1');
+        }
     });
+    // Remember position: a refresh or a back button must not dump the
+    // operator on Overview with their guild selection gone.
+    try { history.replaceState(null, '', '#' + name + (name === 'servers' && current.guildId ? '/' + current.guildId : '')); } catch {}
     var loaders = { overview: loadOverview, servers: loadServers, commands: loadCommandsTab, settings: loadSettings, feedback: loadFeedback, audit: loadAudit };
-    if (loaders[name]) loaders[name]().catch(function (e) { toast('load failed: ' + e.message); });
+    if (loaders[name]) loaders[name]().catch(function (e) { toastError(e); });
 }
 TABS.forEach(function (t) {
     document.addEventListener('DOMContentLoaded', function () {
         var b = $('nav-' + t); if (b) b.addEventListener('click', function () { showTab(t); });
     });
+});
+function tabFromHash() {
+    var m = (location.hash || '').match(/^#([a-z]+)(?:\/([0-9]+))?$/);
+    if (!m || TABS.indexOf(m[1]) === -1) return null;
+    return { tab: m[1], guildId: m[2] || null };
+}
+window.addEventListener('hashchange', function () {
+    var h = tabFromHash();
+    if (h && (h.tab !== current.tab || h.guildId !== current.guildId)) {
+        if (h.guildId) current.guildId = h.guildId;
+        showTab(h.tab);
+    }
 });
 
 // ---- overview ---------------------------------------------------------------
@@ -357,6 +419,25 @@ async function loadOverview() {
 }
 
 // ---- servers ----------------------------------------------------------------
+// The 10 s poll must never eat in-flight typing: if focus is inside the
+// guild form, or any field differs from what was loaded, skip the rebuild.
+function guildFormBusy() {
+    var form = $('guildSettingsForm');
+    if (!form || form.children.length === 0) return false;
+    if (form.contains(document.activeElement)) return true;
+    var inputs = form.querySelectorAll('input,select,textarea');
+    for (var i = 0; i < inputs.length; i += 1) {
+        var n = inputs[i];
+        if (n.type === 'checkbox') { if (n.checked !== (n.getAttribute('data-loaded') === '1')) return true; }
+        else if (n.tagName === 'SELECT') { if (n.value !== (n.getAttribute('data-loaded') || '')) return true; }
+        else if (n.value !== (n.getAttribute('data-loaded') || '')) return true;
+    }
+    return false;
+}
+function markLoaded(n) {
+    if (n.type === 'checkbox') n.setAttribute('data-loaded', n.checked ? '1' : '0');
+    else n.setAttribute('data-loaded', n.value);
+}
 async function loadServers() {
     var data = await get('/api/guilds' + (current.guildId ? '?id=' + encodeURIComponent(current.guildId) : ''));
     current.guilds = data.guilds;
@@ -373,6 +454,7 @@ async function loadServers() {
     });
     if (!data.guilds.length) grid.appendChild(el('p', 'the bot is in no servers', 'muted'));
 
+    if (guildFormBusy()) return; // the operator is mid-edit: rebuild nothing below the grid
     var detail = clear($('guildDetail'));
     var sel = data.selected;
     if (!sel) { detail.appendChild(el('p', 'pick a server above', 'muted')); return; }
@@ -390,53 +472,81 @@ async function loadServers() {
     form.appendChild(el('h3', 'Server settings'));
     function field(labelText, id, value, kind) {
         var row = el('div', null, 'row');
-        row.appendChild(el('label', labelText));
         var input = el('input');
-        input.id = id;
+        var lab = el('label', labelText);
+        input.id = id; lab.htmlFor = id;
         if (kind === 'check') { input.type = 'checkbox'; input.checked = Boolean(value); }
         else { input.value = value === null || value === undefined ? '' : String(value); if (kind === 'number') input.type = 'number'; }
+        if (kind === 'prefix') { input.maxLength = 5; input.style.maxWidth = '8ch'; }
+        markLoaded(input);
+        row.appendChild(lab);
         row.appendChild(input);
         form.appendChild(row);
         return input;
     }
-    var prefixIn = field('Prefix (blank = global)', 'g-prefix', sel.settings.prefix, 'text');
+    // Tri-state override: a select can only carry a valid state — no 'ture'
+    // silently becoming Off, and 'inherit' stays visible after save.
+    function triField(labelText, id, value) {
+        var row = el('div', null, 'row');
+        var lab = el('label', labelText);
+        var sel2 = el('select');
+        lab.htmlFor = id; sel2.id = id;
+        [['', 'inherit'], ['true', 'on'], ['false', 'off']].forEach(function (pair) {
+            var o = el('option', pair[1]); o.value = pair[0];
+            if (pair[0] === (value === null || value === undefined ? '' : String(value))) o.selected = true;
+            sel2.appendChild(o);
+        });
+        sel2.setAttribute('aria-label', labelText + ' override');
+        markLoaded(sel2);
+        row.appendChild(lab); row.appendChild(sel2);
+        form.appendChild(row);
+        return sel2;
+    }
+    function triVal(n) { return n.value === '' ? null : n.value === 'true'; }
+    var prefixIn = field('Prefix (blank = global)', 'g-prefix', sel.settings.prefix, 'prefix');
     var g247 = field('24/7 — never auto-leave', 'g-247', sel.settings.twentyFourSeven, 'check');
-    var gAuto = field('Autoplay override', 'g-autoplay', sel.settings.autoplay, 'text');
-    var gVote = field('Vote-skip override (true/false)', 'g-voteskip', sel.settings.voteSkip, 'text');
+    var gAuto = triField('Autoplay', 'g-autoplay', sel.settings.autoplay);
+    var gVote = triField('Vote-skip', 'g-voteskip', sel.settings.voteSkip);
     var gMod = field('Modlog channel ID', 'g-modlog', sel.settings.modlogChannelId, 'text');
     var gWelcome = field('Welcome channel ID', 'g-welcome', sel.settings.welcomeChannelId, 'text');
     var gWelcomeMsg = field('Welcome text ({member} {guild} {count})', 'g-welcome-msg', sel.settings.welcomeMessage, 'text');
-    var gAutoRoles = field('Auto-role IDs (comma-separated)', 'g-autoroles',
+    var gAutoRoles = field('Auto-role IDs (comma-separated, max 5)', 'g-autoroles',
         Array.isArray(sel.settings.autoRoleIds) ? sel.settings.autoRoleIds.join(',') : '', 'text');
     var gDj = field('DJ role ID (blank = off)', 'g-dj', sel.settings.djRoleId, 'text');
     var gMusicCh = field('Music channel ID (blank = any)', 'g-music-ch', sel.settings.musicChannelId, 'text');
-    var gSb = field('SponsorBlock override (true/false)', 'g-sb', sel.settings.sponsorBlock, 'text');
+    var gSb = triField('SponsorBlock', 'g-sb', sel.settings.sponsorBlock);
+    form.appendChild(el('p', 'Channel and role IDs: right-click a channel or role in Discord (with Developer Mode on in User Settings → Advanced) → Copy ID.', 'muted'));
     var saveBtn = el('button', 'Save server settings', 'act');
-    saveBtn.addEventListener('click', async function () {
-        function tri(v) { v = (v || '').trim().toLowerCase(); return v === '' ? null : (v === 'true' || v === 'on' || v === '1' || v === 'yes'); }
+    once(saveBtn, async function () {
         function ids(v) { return (v || '').trim() ? (v || '').trim() : null; }
         await post('/api/guild/settings', {
             guildId: sel.id,
             patch: {
                 prefix: (prefixIn.value || '').trim() ? (prefixIn.value || '').trim() : null,
                 twentyFourSeven: g247.checked,
-                autoplay: tri(gAuto.value),
-                voteSkip: tri(gVote.value),
+                autoplay: triVal(gAuto),
+                voteSkip: triVal(gVote),
                 modlogChannelId: ids(gMod.value),
                 welcomeChannelId: ids(gWelcome.value),
                 welcomeMessage: ids(gWelcomeMsg.value),
                 autoRoleIds: ids(gAutoRoles.value),
                 djRoleId: ids(gDj.value),
                 musicChannelId: ids(gMusicCh.value),
-                sponsorBlock: tri(gSb.value),
+                sponsorBlock: triVal(gSb),
             },
         });
-        loadServers();
+        // Saved: the form is clean again, so the next refresh may rebuild it
+        // even if focus never left.
+        if (form.contains(document.activeElement)) document.activeElement.blur();
+        form.querySelectorAll('input,select,textarea').forEach(markLoaded);
+        loadServers().catch(toastError);
     });
-    var resetBtn = el('button', 'Reset overrides', 'act sec');
-    resetBtn.addEventListener('click', async function () {
+    var resetBtn = el('button', 'Reset this server', 'act sec');
+    once(resetBtn, async function () {
+        if (!confirm('Reset clears this server\u2019s settings, its per-server command overrides, and its usage stats. This cannot be undone except from a backup. Continue?')) return;
         await post('/api/guild/reset', { guildId: sel.id });
-        loadServers();
+        if (form.contains(document.activeElement)) document.activeElement.blur();
+        loadServers().catch(toastError);
     });
     form.appendChild(saveBtn); form.appendChild(resetBtn);
 
@@ -453,12 +563,22 @@ async function loadServers() {
             if (pair[0] === (c.guildOverride || '')) o.selected = true;
             sel2.appendChild(o);
         });
+        sel2.setAttribute('aria-label', c.name + ' override for ' + sel.name);
+        markLoaded(sel2);
         sel2.disabled = !!c.ownerOnly;
         sel2.addEventListener('change', function () {
             post('/api/commands/toggle', {
                 name: c.name, guildId: sel.id,
                 on: sel2.value === '' ? null : sel2.value === 'on',
-            }).then(loadServers).catch(function (e) { toast(e.message); });
+            }).then(function () {
+                sel2.blur(); markLoaded(sel2);
+                return loadServers();
+            }).catch(function (e) {
+                // Same contract as the global checkbox: never leave the UI
+                // showing a state the server refused.
+                sel2.value = c.guildOverride || '';
+                toastError(e);
+            });
         });
         td.appendChild(sel2);
         td.appendChild(el('span', c.enabled ? '' : '  ', 'muted'));
@@ -481,17 +601,16 @@ async function loadServers() {
         ['skip', 'pause', 'resume', 'stop'].forEach(function (op) {
             var b = el('button', op, 'act');
             b.style.marginRight = '6px';
-            b.addEventListener('click', function () {
-                post('/api/music', { guildId: sel.id, op: op }).then(loadServers).catch(function (e) { toast(e.message); });
-            });
+            b.setAttribute('aria-label', op + ' playback in ' + sel.name);
+            once(b, function () { return post('/api/music', { guildId: sel.id, op: op }).then(loadServers); });
             mc.appendChild(b);
         });
         var volIn = el('input'); volIn.type = 'number'; volIn.min = '0'; volIn.max = '100'; volIn.value = String(sel.music.volume || 80);
         volIn.style.width = '80px';
+        volIn.setAttribute('aria-label', 'volume 0 to 100');
         var volBtn = el('button', 'set volume', 'act sec');
-        volBtn.addEventListener('click', function () {
-            post('/api/music', { guildId: sel.id, op: 'volume', value: Number(volIn.value) })
-                .then(loadServers).catch(function (e) { toast(e.message); });
+        once(volBtn, function () {
+            return post('/api/music', { guildId: sel.id, op: 'volume', value: Number(volIn.value) }).then(loadServers);
         });
         mc.appendChild(volIn); mc.appendChild(volBtn);
 
@@ -517,11 +636,22 @@ async function loadServers() {
 }
 
 // ---- commands (global toggles) ------------------------------------------------
+var commandFilter = '';
 async function loadCommandsTab() {
     var data = await get('/api/commands');
     var tb = clear($('cmdRows'));
+    var search = $('cmdSearch');
+    if (!search.bound) {
+        search.bound = true;
+        search.addEventListener('input', function () {
+            commandFilter = search.value.trim().toLowerCase();
+            applyCommandFilter();
+        });
+    }
+    applyCommandFilter(); // survive a reload: re-apply the current filter
     data.commands.forEach(function (c) {
         var tr = document.createElement('tr');
+        tr.dataset.search = c.name.toLowerCase();
         tr.appendChild(el('td', c.name));
         tr.appendChild(el('td', c.description, 'muted'));
         var tdBadges = el('td');
@@ -532,20 +662,45 @@ async function loadCommandsTab() {
         var td = el('td');
         var lab = el('label', null, 'sw');
         var box = el('input'); box.type = 'checkbox'; box.checked = c.enabled;
+        box.setAttribute('aria-label', 'enable ' + c.name);
+        var state = el('span', c.enabled ? 'enabled' : 'disabled');
         box.addEventListener('change', function () {
             post('/api/commands/toggle', { name: c.name, guildId: null, on: box.checked })
-                .then(loadCommandsTab).catch(function (e) { toast(e.message); box.checked = !box.checked; });
+                .then(function () {
+                    // Update the row in place: a full re-render would reset
+                    // scroll, focus and the active filter on every click.
+                    state.textContent = box.checked ? 'enabled' : 'disabled';
+                })
+                .catch(function (e) { box.checked = !box.checked; toastError(e); });
         });
-        lab.appendChild(box); lab.appendChild(el('span', c.enabled ? 'enabled' : 'disabled'));
+        lab.appendChild(box); lab.appendChild(state);
         td.appendChild(lab);
         tr.appendChild(td);
         tb.appendChild(tr);
     });
+    applyCommandFilter();
+}
+function applyCommandFilter() {
+    var rows = $('cmdRows').children;
+    for (var i = 0; i < rows.length; i += 1) {
+        rows[i].style.display = !commandFilter || rows[i].dataset.search.indexOf(commandFilter) !== -1 ? '' : 'none';
+    }
 }
 
 // ---- settings ------------------------------------------------------------------
+// This tab is never polled, so the only rebuild risk is a save re-rendering
+// the form under someone typing in the JSON textarea or a sibling field.
+function settingsBusy() {
+    var form = $('settingsForm');
+    if (!form || form.children.length === 0) return false;
+    if (form.contains(document.activeElement)) return true;
+    var ta = $('rolesJson');
+    if (ta && ta.value !== ta.getAttribute('data-loaded')) return true;
+    return false;
+}
 async function loadSettings() {
     var data = await get('/api/settings');
+    if (settingsBusy()) return;
     var form = clear($('settingsForm'));
     data.schema.forEach(function (item) {
         var row = el('div', null, 'row');
@@ -566,17 +721,25 @@ async function loadSettings() {
         if (item.hint) row.appendChild(el('span', item.hint, 'muted'));
         input.addEventListener('change', function () {
             var value = item.type === 'bool' ? input.checked : (item.type === 'int' ? Number(input.value) : input.value);
-            post('/api/settings', { path: item.path, value: value }).then(loadSettings).catch(function (e) { toast(e.message); });
+            post('/api/settings', { path: item.path, value: value }).then(loadSettings).catch(function (e) {
+                input.blur(); // drop focus so the re-sync rebuild can run
+                loadSettings().catch(toastError);
+                toastError(e);
+            });
         });
         form.appendChild(row);
     });
 
     form.appendChild(el('h3', 'Reaction-role table (JSON)'));
-    var ta = el('textarea'); ta.id = 'rolesJson'; ta.value = JSON.stringify(data.roles, null, 2);
+    var ta = el('textarea');
+    ta.id = 'rolesJson'; ta.value = JSON.stringify(data.roles, null, 2);
+    ta.setAttribute('aria-label', 'reaction role table, JSON');
+    ta.setAttribute('data-loaded', ta.value);
     form.appendChild(ta);
     var rolesBtn = el('button', 'Save roles', 'act');
-    rolesBtn.addEventListener('click', function () {
-        post('/api/settings', { path: 'reactionRoles.roles', value: ta.value }).then(loadSettings).catch(function (e) { toast(e.message); });
+    once(rolesBtn, async function () {
+        await post('/api/settings', { path: 'reactionRoles.roles', value: ta.value });
+        loadSettings().catch(toastError);
     });
     form.appendChild(rolesBtn);
 
@@ -624,7 +787,8 @@ async function loadSettings() {
         ov.appendChild(li);
     });
 
-    $('securityNote').textContent = data.securityNotes.join(' · ');
+    var notes = clear($('securityNote'));
+    data.securityNotes.forEach(function (line) { notes.appendChild(el('li', line)); });
 }
 
 // ---- feedback / audit -------------------------------------------------------------
@@ -644,10 +808,36 @@ async function loadAudit() {
 document.addEventListener('DOMContentLoaded', function () {
     $('refreshFb').addEventListener('click', loadFeedback);
     $('refreshAudit').addEventListener('click', loadAudit);
-    showTab('overview');
+    // Tabs are a real tablist: arrow keys move between them.
+    document.querySelector('nav').addEventListener('keydown', function (e) {
+        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+        var i = TABS.indexOf(current.tab);
+        var next = TABS[(i + (e.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length];
+        showTab(next);
+        var btn = $('nav-' + next); if (btn) btn.focus();
+        e.preventDefault();
+    });
+    // Land where the URL says, not always on Overview.
+    var start = tabFromHash();
+    if (start) {
+        if (start.guildId) current.guildId = start.guildId;
+        showTab(start.tab);
+    } else {
+        showTab('overview');
+    }
+    var pollsFailed = 0;
     setInterval(function () {
-        if (current.tab === 'overview') loadOverview().catch(function () {});
-        if (current.tab === 'servers') loadServers().catch(function () {});
+        var failing = function (e) {
+            pollsFailed += 1;
+            var b = $('liveBanner');
+            b.textContent = 'data is stale: the last refresh failed (' + e.message + ')';
+            b.style.display = '';
+        };
+        var ok = function () {
+            if (pollsFailed) { pollsFailed = 0; $('liveBanner').style.display = 'none'; }
+        };
+        if (current.tab === 'overview') loadOverview().then(ok, failing);
+        if (current.tab === 'servers') loadServers().then(ok, function () {});
     }, STATUS_REFRESH_MS);
 });
 `;
@@ -659,26 +849,27 @@ function dashboardPage(csrf) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<link rel="icon" href="data:,">
+<link rel="icon" href="${faviconHref()}">
 <title>MockBot admin</title>
 <style>${DASHBOARD_CSS}</style>
 </head>
 <body data-csrf="${esc(csrf)}">
 <header>
 <h1>MockBot admin</h1>
-<form method="post" action="/logout"><button class="act" type="submit">Log out</button></form>
+<form method="post" action="/logout"><button class="act sec" type="submit">Log out</button></form>
 </header>
-<nav>
-<button id="nav-overview" type="button" class="on">Overview</button>
-<button id="nav-servers" type="button">Servers</button>
-<button id="nav-commands" type="button">Commands</button>
-<button id="nav-settings" type="button">Settings</button>
-<button id="nav-feedback" type="button">Feedback</button>
-<button id="nav-audit" type="button">Audit</button>
+<nav role="tablist">
+<button id="nav-overview" type="button" role="tab" class="on" aria-selected="true" tabindex="0" aria-controls="tab-overview">Overview</button>
+<button id="nav-servers" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="tab-servers">Servers</button>
+<button id="nav-commands" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="tab-commands">Commands</button>
+<button id="nav-settings" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="tab-settings">Settings</button>
+<button id="nav-feedback" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="tab-feedback">Feedback</button>
+<button id="nav-audit" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="tab-audit">Audit</button>
 </nav>
 <main>
+<div id="liveBanner" class="banner" role="alert" style="display:none"></div>
 <div id="tab-overview">
-<p id="ownerWarn" class="badge off" style="display:none"></p>
+<p id="ownerWarn" class="banner" style="display:none"></p>
 <section><h2>Status</h2><dl id="status"><dt>…</dt><dd class="muted">loading</dd></dl></section>
 <section><h2>Music</h2><ul id="music"><li class="muted">loading</li></ul></section>
 <section><h2>Recently played</h2><ol id="recentPlayed"><li class="muted">loading</li></ol></section>
@@ -698,10 +889,11 @@ function dashboardPage(csrf) {
 <div id="tab-commands" style="display:none">
 <section><h2>Command toggles (all servers)</h2>
 <p class="muted">Unchecking hides the command from the picker, the prefix parser and help everywhere except for the bot owner. Per-server overrides live on the Servers tab.</p>
+<p class="row"><input id="cmdSearch" type="search" placeholder="Filter commands…" aria-label="Filter commands by name"></p>
 <table><thead><tr><th>Command</th><th>Description</th><th>Access</th><th>Uses</th><th>Enabled</th></tr></thead><tbody id="cmdRows"><tr><td colspan="5" class="muted">loading</td></tr></tbody></table></section>
 </div>
 <div id="tab-settings" style="display:none">
-<section><h2>Global parameters</h2><p id="securityNote" class="muted"></p><div id="settingsForm"></div></section>
+<section><h2>Global parameters</h2><ul id="securityNote" class="muted"></ul><div id="settingsForm"></div></section>
 <section><h2>Active overrides (runtime-config.json)</h2><ul id="overrides"><li class="muted">loading</li></ul></section>
 </div>
 <div id="tab-feedback" style="display:none">
@@ -717,7 +909,7 @@ function dashboardPage(csrf) {
 </section>
 </div>
 </main>
-<div id="toast" class="toast"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script>${DASHBOARD_JS}</script>
 </body>
 </html>`;
@@ -1324,11 +1516,13 @@ async function startPortal(options = {}) {
                     'djRoleId', 'musicChannelId', 'sponsorBlock',
                 ];
                 const patch = {};
+                const notes = [];
                 for (const key of allowed) {
                     if (!(key in patchIn)) continue;
                     let v = patchIn[key];
                     if (key === 'prefix') {
-                        v = v === null || v === '' ? null : String(v).trim().slice(0, 5);
+                        v = v === null || v === '' ? null : String(v).trim();
+                        if (v && v.length > 5) { notes.push('prefix kept first 5 characters'); v = v.slice(0, 5); }
                         if (v && /[\r\n<]/.test(v)) return fail(res, 400, 'prefix contains forbidden characters');
                     } else if (key === 'modlogChannelId' || key === 'welcomeChannelId' || key === 'musicChannelId') {
                         v = v === null || v === '' ? null : String(v).trim();
@@ -1337,14 +1531,17 @@ async function startPortal(options = {}) {
                         v = v === null || v === '' ? null : String(v).trim();
                         if (v && !/^\d{5,25}$/.test(v)) return fail(res, 400, 'djRoleId must be a role id');
                     } else if (key === 'welcomeMessage') {
-                        v = v === null || v === '' ? null : String(v).slice(0, 400);
+                        v = v === null || v === '' ? null : String(v);
+                        if (v && v.length > 400) { notes.push('welcome text kept first 400 characters'); v = v.slice(0, 400); }
                         if (v && /[\r<@]|https?:/i.test(v)) {
                             return fail(res, 400, 'welcome text must be plain (no <, @, or links; {member} {guild} {count} allowed)');
                         }
                     } else if (key === 'autoRoleIds') {
                         if (v === null || v === '' || (Array.isArray(v) && !v.length)) v = null;
                         else {
-                            const ids = (Array.isArray(v) ? v : String(v).split(/[,\s]+/)).map(String).filter(Boolean).slice(0, 5);
+                            const all = (Array.isArray(v) ? v : String(v).split(/[,\s]+/)).map(String).filter(Boolean);
+                            const ids = all.slice(0, 5);
+                            if (all.length > 5) notes.push(`auto-role ids kept first 5 of ${all.length}`);
                             if (!ids.length) v = null;
                             else if (!ids.every(s => /^\d{5,25}$/.test(s))) return fail(res, 400, 'autoRoleIds must be role ids');
                             else v = ids;
@@ -1358,7 +1555,7 @@ async function startPortal(options = {}) {
                 }
                 guildSettings.patch(gid, patch);
                 await audit(session, 'guild-settings', `guild ${gid} ${JSON.stringify(patch)}`);
-                return json(res, 200, { ok: true, message: 'server settings saved' });
+                return json(res, 200, { ok: true, message: 'server settings saved', notes });
             }
 
             if (method === 'POST' && pathname === '/api/guild/reset') {
@@ -1370,7 +1567,7 @@ async function startPortal(options = {}) {
                 commandToggles.clearGuild(gid);
                 usage.clearGuild(gid);
                 await audit(session, 'guild-reset', `guild ${gid}`);
-                return json(res, 200, { ok: true, message: 'server overrides cleared' });
+                return json(res, 200, { ok: true, message: 'server settings, command overrides and usage stats cleared' });
             }
 
             if (method === 'POST' && pathname === '/api/commands/toggle') {
@@ -1422,7 +1619,8 @@ async function startPortal(options = {}) {
                     return fail(res, 502, `distube refused: ${String(err?.message ?? err).slice(0, 200)}`);
                 }
                 await audit(session, 'music', `${op} guild ${gid}${op === 'volume' ? ` -> ${body.value}` : ''}`);
-                return json(res, 200, { ok: true, message: op });
+                const done = { skip: '⏭️ skipped', pause: '⏸️ paused', resume: '▶️ resumed', stop: '⏹️ stopped', volume: `🔊 volume → ${body.value}` };
+                return json(res, 200, { ok: true, message: done[op] || op });
             }
 
             if (method === 'GET' && pathname === '/api/backup') {
