@@ -1025,6 +1025,16 @@ await check('autoplay ids, mix url and the chain/failure brakes', () => {
 
 const components = require('../lib/components');
 
+// The playSong embed's control row runs through ButtonBuilder, which has no
+// .setTitle (that's the Embed API) — a stray setTitle once killed every
+// song start with "setTitle is not a function" while no test built a row.
+await check('the now-playing control row builds and serializes', () => {
+    const { controlRow } = require('../lib/musicUi');
+    const row = controlRow(fakeQueue(['a'], { id: 'g-ctl' })).toJSON();
+    assert.equal(row.components.length, 3, 'three buttons');
+    assert.ok(row.components.every(c => c.label && c.emoji), 'every button has a label and emoji');
+});
+
 await check('component dispatch pages the queue and strips stale controls', async () => {
     cooldowns.__reset();
     const queue = fakeQueue(Array.from({ length: 16 }, (_, i) => `song ${i}`), { id: 'g-btn' });
