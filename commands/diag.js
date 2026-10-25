@@ -77,7 +77,7 @@ module.exports = {
     data: new SlashCommandBuilder()
         .setName('diag')
         .setDescription('Voice diagnostics (temporary)')
-        .addStringOption(o => o.setName('mode').setDescription('watch | test').setRequired(false)),
+        .addStringOption(o => o.setName('mode').setDescription('deps | watch | test').setRequired(false)),
 
     async execute(ctx) {
         const mode = (ctx.option('mode') ?? ctx.args[0] ?? '').toLowerCase();
@@ -109,6 +109,30 @@ module.exports = {
             ].join('\n\n');
             console.log(`[diag.watch] done ${JSON.stringify(counters(queue))}`);
             return ctx.reply(`\`\`\`${body.slice(0, 1800)}\`\`\``);
+        }
+
+        if (mode === 'deps') {
+            // Remote version of `node test/voice-probe.js`'s static half: the
+            // library table voice actually chose (DAVE, opus, encryption) plus
+            // whether the DAVE native addon itself loads. A missing/broken
+            // davey binary = ws close 4017 = "cannot connect after 30 seconds".
+            const lines = [];
+            try {
+                lines.push(require('@discordjs/voice').generateDependencyReport());
+            } catch (err) {
+                lines.push(`dependency report failed: ${err.message}`);
+            }
+            try {
+                require('@snazzah/davey');
+                lines.push('davey require(): OK');
+            } catch (err) {
+                lines.push(`davey require() FAILED: ${err.message.split('\n')[0]}`);
+            }
+            try {
+                lines.push(`node ${process.version} on ${process.platform}/${process.arch}`);
+            } catch { /* cosmetic */ }
+            const body = lines.join('\n');
+            return ctx.reply(`\`\`\`${body.slice(0, 1800)}${body.length > 1800 ? '\n…' : ''}\`\`\``);
         }
 
         if (mode === 'test') {
