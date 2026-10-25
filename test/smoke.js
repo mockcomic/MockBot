@@ -92,7 +92,7 @@ await check('loadCommands registry', () => {
     for (const name of [
         'nowplaying', 'shuffle', 'previous', 'remove', 'clear', 'seek',
         'playlist', 'lyrics', 'autoplay', '247', 'leave', 'voteskip',
-        'remind', 'poll', 'stats', 'timeout', 'modlog', 'prefix',
+        'remind', 'poll', 'stats', 'timeout', 'modlog', 'prefix', 'logs',
     ]) {
         assert.ok(commands.get(name)?.data, `${name} should be registered as a slash command too`);
     }
@@ -851,6 +851,22 @@ await check('portal admin API: csrf, settings, toggles, guild detail, audit', as
         assert.ok(lines.some(l => /settings prefix = "\?"/.test(l)), 'the settings change is in the trail');
         const auditApi = await (await fetch(`${base}/api/audit`, { headers: { cookie } })).json();
         assert.ok(auditApi.lines.length >= 5);
+
+        // Persistent log: /api/logs tails the file the console now tees to.
+        const logSink = require('../lib/logSink');
+        logSink.start();
+        console.log('smoke: line that must land in the file log');
+        const logsApi = await (await fetch(`${base}/api/logs?errors=0`, { headers: { cookie } })).json();
+        assert.ok(Array.isArray(logsApi.lines) && logsApi.lines.some(l => l.includes('must land in the file log')),
+            'the written line shows up through /api/logs');
+        console.error('smoke ERROR marker');
+        const errApi = await (await fetch(`${base}/api/logs?errors=1`, { headers: { cookie } })).json();
+        assert.ok(errApi.lines.some(l => /\sERROR\s/.test(l)), 'errors=1 keeps ERROR lines');
+        assert.ok(!errApi.lines.some(l => /must land in the file log/.test(l)), 'errors=1 drops INFO lines');
+        const raw = await fetch(`${base}/logs.txt`, { headers: { cookie } });
+        assert.equal(raw.status, 200);
+        assert.match(raw.headers.get('content-disposition'), /attachment; filename="mockbot\.log"/);
+        assert.ok((await raw.text()).includes('must land in the file log'), '/logs.txt carries the log');
 
         // Status reflects the disabled count and usage totals.
         const status = await (await fetch(`${base}/api/status`, { headers: { cookie } })).json();

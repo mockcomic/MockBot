@@ -1,4 +1,6 @@
 require('dotenv').config();
+const logSink = require('./lib/logSink'); // patches the console: keep this first
+logSink.start();
 const { Client, GatewayIntentBits, Partials, Events, MessageFlags } = require('discord.js');
 const { DisTube } = require('distube');
 const { YtDlpPluginPatched } = require('./lib/YtDlpPluginPatched');
@@ -28,6 +30,7 @@ const { startPortal } = require('./web/portal');
 const REQUIRED_NODE = 22;
 
 if (!process.env.TOKEN) {
+    logSink.emergency('[boot] TOKEN is missing. Create a .env file in the project root (see .env.example).');
     console.error('[boot] TOKEN is missing. Create a .env file in the project root (see .env.example).');
     process.exit(1);
 }
@@ -335,6 +338,7 @@ async function runCommand(cmd, ctx) {
 applyAllowedPrivilegedIntents()
     .then(() => client.login(process.env.TOKEN))
     .catch(err => {
+        logSink.emergency(`[boot] Login failed: ${err.message}\n${err.stack ?? ''}`);
         console.error(`[boot] Login failed: ${err.message}`);
         console.error('Check that TOKEN in .env is valid, and that the bot application is still active.');
         process.exit(1);

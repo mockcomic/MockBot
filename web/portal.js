@@ -55,6 +55,8 @@ const API_LIMIT = 240; // requests per window per address (UI polls every 10 s)
 const API_WINDOW_MS = 5 * 60 * 1000;
 const FEEDBACK_LIMIT = 200; // newest lines the portal will show
 const AUDIT_LIMIT = 100;
+const LOGS_LIMIT = 800; // newest log lines the portal will show
+const LOGS_DOWNLOAD_MAX = 250 * 1024; // /logs.txt byte cap (newest tail)
 const STATUS_REFRESH_MS = 10000;
 
 const REPEAT_LABELS = ['off', 'song', 'queue'];
@@ -322,7 +324,7 @@ function dl(node, rows) {
 
 var current = { tab: 'overview', guildId: null, guilds: null };
 
-var TABS = ['overview', 'servers', 'commands', 'settings', 'feedback', 'audit'];
+var TABS = ['overview', 'servers', 'commands', 'settings', 'feedback', 'audit', 'logs'];
 function showTab(name) {
     if (TABS.indexOf(name) === -1) name = 'overview';
     current.tab = name;
@@ -338,7 +340,7 @@ function showTab(name) {
     // Remember position: a refresh or a back button must not dump the
     // operator on Overview with their guild selection gone.
     try { history.replaceState(null, '', '#' + name + (name === 'servers' && current.guildId ? '/' + current.guildId : '')); } catch {}
-    var loaders = { overview: loadOverview, servers: loadServers, commands: loadCommandsTab, settings: loadSettings, feedback: loadFeedback, audit: loadAudit };
+    var loaders = { overview: loadOverview, servers: loadServers, commands: loadCommandsTab, settings: loadSettings, feedback: loadFeedback, audit: loadAudit, logs: loadLogs };
     if (loaders[name]) loaders[name]().catch(function (e) { toastError(e); });
 }
 TABS.forEach(function (t) {
@@ -805,9 +807,23 @@ async function loadAudit() {
     data.lines.forEach(function (line) { ol.appendChild(el('li', line)); });
 }
 
+// ---- persistent log ---------------------------------------------------------------
+async function loadLogs() {
+    var errsOnly = $('logErrorsOnly') && $('logErrorsOnly').checked;
+    var data = await get('/api/logs?errors=' + (errsOnly ? '1' : '0'));
+    var pre = $('logView');
+    if (!data.lines.length) { pre.textContent = 'no log entries yet'; return; }
+    pre.textContent = data.lines.join('\n');
+    pre.scrollTop = pre.scrollHeight; // newest at the bottom, keep it in view
+    $('logMeta').textContent = data.lines.length + ' newest lines · file: ' + data.file +
+        (data.truncated ? ' (older lines omitted)' : '');
+}
+
 document.addEventListener('DOMContentLoaded', function () {
     $('refreshFb').addEventListener('click', loadFeedback);
     $('refreshAudit').addEventListener('click', loadAudit);
+    $('refreshLogs').addEventListener('click', loadLogs);
+    $('logErrorsOnly').addEventListener('change', loadLogs);
     // Tabs are a real tablist: arrow keys move between them.
     document.querySelector('nav').addEventListener('keydown', function (e) {
         if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
@@ -865,6 +881,7 @@ function dashboardPage(csrf) {
 <button id="nav-settings" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="tab-settings">Settings</button>
 <button id="nav-feedback" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="tab-feedback">Feedback</button>
 <button id="nav-audit" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="tab-audit">Audit</button>
+<button id="nav-logs" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="tab-logs">Logs</button>
 </nav>
 <main>
 <div id="liveBanner" class="banner" role="alert" style="display:none"></div>
@@ -906,6 +923,19 @@ function dashboardPage(csrf) {
 <section>
 <h2>Audit log <button id="refreshAudit" type="button" class="act sec" style="float:right">refresh</button></h2>
 <ol id="audit"><li class="muted">loading</li></ol>
+</section>
+</div>
+<div id="tab-logs" style="display:none">
+<section>
+<h2>Bot log
+<span style="float:right">
+<label class="muted"><input id="logErrorsOnly" type="checkbox"> errors only</label>
+<button id="refreshLogs" type="button" class="act sec">refresh</button>
+<a class="act sec" href="/logs.txt" download>download</a>
+</span>
+</h2>
+<p id="logMeta" class="muted">loading</p>
+<pre id="logView" style="max-height:60vh;overflow:auto;white-space:pre-wrap;background:#0d1117;padding:10px;border-radius:6px">loading</pre>
 </section>
 </div>
 </main>
@@ -1063,6 +1093,7 @@ async function startPortal(options = {}) {
     const playHistory = deps.playHistory ?? require('../lib/playHistory');
     const liveWatch = deps.liveWatch ?? require('../lib/liveWatch');
     const playlistsStore = deps.playlistsStore ?? require('../lib/playlistsStore');
+    const logSink = deps.logSink ?? require('../lib/logSink');
 
     const user = env.WEB_USER;
     const pass = env.WEB_PASS;
@@ -1423,6 +1454,40 @@ async function startPortal(options = {}) {
                     log.warn('[web] audit read failed:', err?.message ?? err);
                 }
                 return json(res, 200, { lines });
+            }
+
+            if (method === 'GET' && pathname === '/api/logs') {
+                const errorsOnly = /^(1|true|yes)$/i.test(url.searchParams.get('errors') ?? '');
+                let lines = [];
+                try {
+                    // over-fetch so filtering leaves enough error lines
+                    lines = await logSink.tail(errorsOnly ? LOGS_LIMIT * 5 : LOGS_LIMIT);
+                } catch (err) {
+                    log.warn('[web] log read failed:', err?.message ?? err);
+                }
+                if (errorsOnly) {
+                    lines = lines.filter(l => /^\S+\s(WARN|ERROR|FATAL)\s/.test(l)).slice(-LOGS_LIMIT);
+                }
+                return json(res, 200, { lines, file: logSink.FILE });
+            }
+
+            // Plain-text newest-first tail of the log, for download.
+            if (method === 'GET' && pathname === '/logs.txt') {
+                let lines = [];
+                try { lines = await logSink.tail(LOGS_LIMIT * 4); } catch (err) {
+                    log.warn('[web] log download failed:', err?.message ?? err);
+                }
+                const text = lines.join('\n') + '\n';
+                const buf = Buffer.byteLength(text) > LOGS_DOWNLOAD_MAX
+                    ? Buffer.from(text, 'utf8').subarray(-LOGS_DOWNLOAD_MAX)
+                    : Buffer.from(text, 'utf8');
+                res.writeHead(200, {
+                    'content-type': 'text/plain; charset=utf-8',
+                    'content-disposition': 'attachment; filename="mockbot.log"',
+                    'content-length': buf.length,
+                    'cache-control': 'no-store',
+                });
+                return res.end(buf);
             }
 
             if (method === 'GET' && pathname === '/api/commands') {
