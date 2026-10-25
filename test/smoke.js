@@ -1204,7 +1204,7 @@ const picker = require('../lib/searchPicker');
 
 await check('search picker stores results, expires, and peeks without leaking', async () => {
     picker.open('tok-1', {
-        songs: [{ name: 'a', url: 'https://example.invalid/a' }],
+        items: [{ name: 'a', url: 'https://example.invalid/a' }],
         voiceChannelId: 'v', textChannelId: 't', guildId: 'g', userId: 'u',
     });
     assert.ok(picker.peek('tok-1'), 'a fresh picker is readable');
@@ -1218,7 +1218,7 @@ await check('search picker stores results, expires, and peeks without leaking', 
     // must reach distube.play and rewrite the message (a missing import here
     // once produced "that control no longer works" on every pick).
     picker.open('tok-play', {
-        songs: [{ name: 'b', url: 'https://example.invalid/b', duration: 10 }],
+        items: [{ name: 'b', url: 'https://example.invalid/b', duration: 10 }],
         voiceChannelId: 'vc-1', textChannelId: 'tc-1', guildId: 'g-pick', userId: 'u-picker',
     });
     let played = null;
@@ -1263,6 +1263,73 @@ await check('search picker stores results, expires, and peeks without leaking', 
     assert.equal(menu.type, 3, 'a native select menu');
     assert.equal(menu.custom_id, 'mb:pick:tok', 'the token rides in the customId');
     assert.equal(menu.options[0].label, 'Song \\[one\\]', 'titles are markdown-escaped');
+});
+
+await check('picker shows playlist items and queues the resolved playlist on pick', async () => {
+    const descriptor = { type: 'playlist', name: 'Best of AC/DC', url: 'https://www.youtube.com/playlist?list=PL9' };
+    const playlistPayload = picker.pickerPayload('acdc', [descriptor], 'tok-pl');
+    const desc = playlistPayload.embeds[0].data.description;
+    assert.ok(desc.includes('📄 Best of AC/DC'), 'the embed marks the playlist line');
+
+    picker.open('tok-pl', {
+        items: [descriptor],
+        voiceChannelId: 'vc-1', textChannelId: 'tc-1', guildId: 'g-pl', userId: 'u-pl-picker',
+    });
+    let played = null;
+    const resolvedPlaylist = { name: 'Best of AC/DC', songs: [{}, {}, {}] };
+    const distubeStub = {
+        getQueue: () => null,
+        plugins: [{ resolve: async url => { played = { resolvedUrl: url }; return resolvedPlaylist; } }],
+        play: async (channel, what) => { played.playlist = { name: what.name, songs: what.songs.length }; },
+    };
+    const interaction = {
+        customId: 'mb:pick:tok-pl',
+        values: ['1'],
+        user: { id: 'u-pl-picker' },
+        member: { voice: { channel: { id: 'vc-1' } }, id: 'u-pl-picker' },
+        guild: {
+            id: 'g-pl',
+            channels: { cache: new Map() },
+            members: { me: { voice: { channelId: 'vc-1' } }, fetch: async () => ({}) },
+            roles: { cache: { get: () => null } },
+        },
+        reply: async () => {},
+        update: () => Promise.resolve(),
+        deferred: false,
+        deferUpdate: async () => { interaction.deferred = true; },
+        message: { edit: payload => { played.content = payload?.content; return Promise.resolve(payload); } },
+    };
+    const components = require('../lib/components');
+    await components.dispatch(interaction, { distube: distubeStub });
+    assert.equal(played.resolvedUrl, descriptor.url, 'the descriptor url went through the plugin resolver');
+    assert.deepEqual(played.playlist, { name: 'Best of AC/DC', songs: 3 }, 'the resolved Playlist reached distube.play');
+    assert.match(String(played.content ?? ''), /Queued playlist \*\*Best of AC\/DC\*\* \(3 songs\)/, 'confirmation names the playlist');
+});
+
+await check('parseInvocation extracts --playlist, the bang, and the query', () => {
+    const { parseInvocation } = require('../lib/music');
+    assert.deepEqual(
+        parseInvocation({ args: ['--playlist', 'https://youtu.be/x?list=PL9'] }),
+        { query: 'https://youtu.be/x?list=PL9', direct: false, playlist: true },
+    );
+    assert.deepEqual(
+        parseInvocation({ args: ['https://youtu.be/x?list=PL9', '--playlist'] }),
+        { query: 'https://youtu.be/x?list=PL9', direct: false, playlist: true },
+        'the flag works after the query too',
+    );
+    assert.deepEqual(
+        parseInvocation({ args: ['!acdc', 'best'] }),
+        { query: 'acdc best', direct: true, playlist: false },
+    );
+    assert.deepEqual(
+        parseInvocation({ args: ['acdc'], option: name => (name === 'direct' ? true : undefined) }),
+        { query: 'acdc', direct: true, playlist: false },
+    );
+    assert.deepEqual(
+        parseInvocation({ args: ['acdc'], option: name => (name === 'playlist' ? true : undefined) }),
+        { query: 'acdc', direct: false, playlist: true },
+        'the slash playlist option counts as the flag',
+    );
 });
 
 // --- v3.4: soundboard path safety --------------------------------------------------

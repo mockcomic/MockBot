@@ -1,6 +1,6 @@
 const { SlashCommandBuilder } = require('discord.js');
 const crypto = require('node:crypto');
-const { play, search, isUrl } = require('../lib/music');
+const { play, search, searchPlaylists, resolvePlaylistDescriptor, isUrl, parseInvocation } = require('../lib/music');
 const { songLink, mdTitle } = require('../lib/musicFormat');
 const { playChannelReply } = require('../lib/musicGuards');
 const picker = require('../lib/searchPicker');
@@ -14,16 +14,20 @@ module.exports = {
     name: 'play',
     aliases: ['p'],
     description: 'Play a song or playlist from a URL or search terms',
-    usage: 'play <url | search terms>   (play! terms = no picker)',
+    usage: 'play <url | search terms>   (--playlist = queue the whole playlist)   (play! terms = no picker)',
     data: new SlashCommandBuilder()
         .setName('play')
         .setDescription('Play a song or playlist from a URL or search terms')
         .addStringOption(option =>
-            option.setName('query').setDescription('Song URL or search terms').setRequired(true),
+            option.setName('query').setDescription('Song URL, playlist URL or search terms').setRequired(true),
         )
         .addBooleanOption(option =>
             option.setName('direct')
                 .setDescription('Skip the picker and play the top search result'),
+        )
+        .addBooleanOption(option =>
+            option.setName('playlist')
+                .setDescription('If the URL is one video inside a playlist, queue the whole playlist'),
         ),
 
     async execute(ctx) {
@@ -36,10 +40,9 @@ module.exports = {
             ?? (await ctx.guild.members.fetch(ctx.user.id).catch(() => null))?.voice?.channel;
         if (!voiceChannel) return ctx.reply('Join a voice channel first, then try again.');
 
-        // `!play! data` — the bang is the opt-out from the picker.
-        let query = ctx.args.join(' ').trim();
-        let direct = Boolean(ctx.option('direct'));
-        if (query.startsWith('!')) { direct = true; query = query.slice(1).trim(); }
+        // `!play! data` — the bang is the opt-out from the picker; `--playlist`
+        // (prefix) or the `playlist` slash option queues the whole list.
+        const { query, direct, playlist } = parseInvocation(ctx);
         if (!query) return ctx.reply(`Usage: \`${ctx.config.prefix}play <url | search terms>\``);
 
         // Resolving through yt-dlp takes seconds, which is over the 3s interaction
@@ -55,6 +58,7 @@ module.exports = {
                     member: ctx.member,
                     textChannel: ctx.channel,
                     message: ctx.message ?? undefined,
+                    playlist,
                 });
 
                 const isPlaylist = Array.isArray(resolved?.songs);
@@ -72,26 +76,37 @@ module.exports = {
             }
 
             const results = await search(ctx.distube, query, 5);
-            if (!results.length) return ctx.reply(`❌ Nothing found for **${mdTitle(query, 100)}**.`);
-            if (results.length === 1) {
+            const playlists = await searchPlaylists(ctx.distube, query, 3);
+            // Playlist descriptors go last; songs keep the first 5 slots.
+            const items = [...results, ...playlists];
+            if (!items.length) return ctx.reply(`❌ Nothing found for **${mdTitle(query, 100)}**.`);
+            if (items.length === 1) {
                 // Nothing to choose between — same behaviour as --direct.
-                const resolved = await ctx.distube.play(voiceChannel, results[0], {
+                // A playlist descriptor must be resolved to a real Playlist first.
+                const one = items[0];
+                const toQueue = one.type === 'playlist'
+                    ? await resolvePlaylistDescriptor(ctx.distube, one, { member: ctx.member })
+                    : one;
+                const resolved = await ctx.distube.play(voiceChannel, toQueue, {
                     member: ctx.member,
                     textChannel: ctx.channel,
                     message: ctx.message ?? undefined,
-                }).then(() => results[0]);
-                return ctx.reply(`✅ Queued ${songLink(resolved)} in **${voiceChannel.name}**.`);
+                }).then(() => toQueue);
+                const what = Array.isArray(resolved?.songs)
+                    ? `playlist **${mdTitle(resolved.name)}** (${resolved.songs.length} songs)`
+                    : songLink(resolved);
+                return ctx.reply(`✅ Queued ${what} in **${voiceChannel.name}**.`);
             }
 
             const token = crypto.randomBytes(8).toString('hex');
             picker.open(token, {
-                songs: results,
+                items,
                 voiceChannelId: voiceChannel.id,
                 textChannelId: ctx.channel.id,
                 guildId: ctx.guild.id,
                 userId: ctx.user.id,
             });
-            return ctx.reply({ ...picker.pickerPayload(query, results, token), ephemeral: true });
+            return ctx.reply({ ...picker.pickerPayload(query, items, token), ephemeral: true });
         } catch (err) {
             console.error('[play]', err);
             return ctx.reply(`❌ Could not play that: ${err.message}`);
