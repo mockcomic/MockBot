@@ -105,11 +105,20 @@ async function applyAllowedPrivilegedIntents() {
 client.on(Events.Error, err => console.error('[client]', err));
 client.on(Events.Warn, info => console.warn('[client]', info));
 
+// The bundled ffmpeg-static (7.0.2) SIGSEGVs on YouTube webm/opus inputs on
+// this box, which killed the stream seconds into every song — silence with a
+// healthy-looking connection (the no-audio bug). Prefer system ffmpeg.
 let ffmpegPath;
 try {
-    ffmpegPath = require('ffmpeg-static');
+    const { execFileSync } = require('node:child_process');
+    execFileSync('ffmpeg', ['-version'], { stdio: 'ignore', timeout: 5000 });
+    ffmpegPath = 'ffmpeg';
 } catch {
-    ffmpegPath = undefined; // fall back to ffmpeg on PATH
+    try {
+        ffmpegPath = require('ffmpeg-static');
+    } catch {
+        ffmpegPath = undefined; // no ffmpeg anywhere; DisTube will error loudly
+    }
 }
 
 const distube = new DisTube(client, {
