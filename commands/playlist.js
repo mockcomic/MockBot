@@ -1,8 +1,8 @@
 const { SlashCommandBuilder } = require('discord.js');
-const { Song, Playlist } = require('distube');
+const { Playlist } = require('distube');
 const store = require('../lib/playlistsStore');
 const { YtDlpPluginPatched } = require('../lib/YtDlpPluginPatched');
-const { videoIdOf } = require('../lib/autoplay');
+const { rebuildStoredSong } = require('../lib/music');
 const { requireQueue, isBlocked, playChannelReply } = require('../lib/musicGuards');
 const { mdTitle } = require('../lib/musicFormat');
 const { clip } = require('../lib/respond');
@@ -11,25 +11,8 @@ const { clip } = require('../lib/respond');
  * Saved queues. A playlist stores display fields + urls only, so loading it
  * rebuilds Song objects and hands DisTube a Playlist directly — a 200-song
  * list starts without a single yt-dlp call (streams resolve as they play).
+ * (rebuildStoredSong lives in lib/music.js, shared with queue resume.)
  */
-
-function rebuildSong(plugin, entry, options) {
-    return new Song(
-        {
-            plugin,
-            source: 'yt-dlp',
-            playFromSource: true,
-            id: videoIdOf(entry.url) ?? undefined,
-            name: entry.name,
-            url: entry.url,
-            isLive: false,
-            thumbnail: entry.thumbnail ?? undefined,
-            duration: Number.isFinite(entry.duration) ? entry.duration : 0,
-            uploader: { name: null, url: null },
-        },
-        options,
-    );
-}
 
 function usage(ctx) {
     return (
@@ -113,7 +96,7 @@ module.exports = {
                     textChannel: ctx.channel,
                     message: ctx.message ?? undefined,
                 };
-                const songs = saved.songs.map(entry => rebuildSong(plugin, entry, options));
+                const songs = saved.songs.map(entry => rebuildStoredSong(plugin, entry, options));
                 const what = songs.length === 1
                     ? songs[0]
                     : new Playlist(
