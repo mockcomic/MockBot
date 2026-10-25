@@ -423,6 +423,45 @@ await check('the patched yt-dlp plugin still exposes the plugin contract', () =>
     assert.equal(isPlaylistUrl('https://www.youtube.com/watch?v=aaaaaaaa'), false);
 });
 
+await check('ytDlpArgs controls --no-playlist and never caps the list', () => {
+    const { ytDlpArgs } = require('../lib/YtDlpPluginPatched');
+    const watch = 'https://www.youtube.com/watch?v=aaaaaaaa&list=PL123';
+    const bare = 'https://www.youtube.com/playlist?list=PL123';
+
+    assert.ok(ytDlpArgs(watch).includes('--no-playlist'), 'watch link defaults to one video');
+    assert.ok(!ytDlpArgs(bare).includes('--no-playlist'), 'bare playlist url resolves the list');
+    assert.ok(!ytDlpArgs(watch, { allowPlaylist: true }).includes('--no-playlist'), 'allowPlaylist opts in');
+
+    for (const args of [ytDlpArgs(bare), ytDlpArgs(watch, { allowPlaylist: true })]) {
+        assert.ok(!args.includes('--playlist-items'), 'no 100-song cap anymore');
+    }
+    assert.deepEqual(ytDlpArgs(bare, { extraArgs: ['--flat-playlist'] }).slice(-1), ['--flat-playlist']);
+});
+
+await check('playlistEntries keeps only playlist rows from a flat search', () => {
+    const { playlistEntries } = require('../lib/YtDlpPluginPatched');
+    const info = {
+        entries: [
+            { id: 'PL1', title: 'Best of AC/DC', url: 'https://www.youtube.com/playlist?list=PL1', thumbnail: 'https://i.ytimg.com/vi/x/hq1.jpg' },
+            { id: 'aaa', title: 'A video', url: 'https://www.youtube.com/watch?v=aaa' },
+            { id: 'PL2', title: 'Hard Rock', url: 'https://www.youtube.com/playlist?list=PL2' },
+            null,
+        ],
+    };
+    const out = playlistEntries(info, 3);
+    assert.equal(out.length, 2);
+    assert.deepEqual(out[0], {
+        type: 'playlist',
+        name: 'Best of AC/DC',
+        url: 'https://www.youtube.com/playlist?list=PL1',
+        thumbnail: 'https://i.ytimg.com/vi/x/hq1.jpg',
+    });
+    assert.equal(out[1].thumbnail, undefined);
+    assert.equal(playlistEntries(info, 1).length, 1, 'limit respected');
+    assert.deepEqual(playlistEntries({ entries: 'nope' }, 3), []);
+    assert.deepEqual(playlistEntries({}, 3), []);
+});
+
 await check('music events register on a DisTube instance', () => {
     const { Client, GatewayIntentBits } = require('discord.js');
     const { YtDlpPlugin } = require('@distube/yt-dlp');
