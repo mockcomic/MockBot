@@ -111,10 +111,12 @@ module.exports = {
                 .map(([lvl, n]) => `${lvl}: ${n}`)
                 .join(' · ') || 'no entries';
 
+            // discord.js HttpAttachment needs a Buffer/stream, not a path
+            // string — a raw path throws "asyncIterator" inside transformComponent.
             const attachments = parts.map(file => ({
                 name: path.basename(file),
                 description: `MockBot log (${errorsOnly ? 'errors only, ' : ''}newest last)`,
-                file,
+                file: fs.readFileSync(file),
             }));
 
             await ctx.reply({
