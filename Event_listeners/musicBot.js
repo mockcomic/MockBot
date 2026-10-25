@@ -1,5 +1,6 @@
 const { EmbedBuilder } = require('discord.js');
 const { COLOR, songLink, statusLine } = require('../lib/musicFormat');
+const { disconnect } = require('../lib/music');
 const { clip } = require('../lib/respond');
 const { controlRow } = require('../lib/musicUi');
 const autoplay = require('../lib/autoplay');
@@ -112,8 +113,8 @@ module.exports = function setupMusicEvents(distube, deps = {}) {
                 ],
             });
             // DisTube removes the queue on its own but stays connected; stop()
-            // is what actually disconnects.
-            await queue.stop().catch(() => {});
+            // alone only halts the player — voices.leave destroys the connection.
+            await disconnect(distube, queue);
         })
         .on('finishSong', (queue, song) => history.recordFinish(queue, song))
         .on('noRelated', (queue, error) =>

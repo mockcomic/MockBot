@@ -1,5 +1,6 @@
 const { Events } = require('discord.js');
 const guildSettings = require('../lib/guildSettings');
+const { disconnect } = require('../lib/music');
 
 /**
  * Leave a voice channel nobody is listening in.
@@ -44,7 +45,8 @@ module.exports = function setupVoiceIdle(client, { distube, config } = {}) {
         queue.textChannel
             ?.send(`👋 Leaving ${name} — nobody was in the channel for ${secondsNow}s.`)
             .catch(() => {});
-        queue.stop().catch(() => {});
+        // queue.stop() alone never hangs up — destroy the connection too.
+        disconnect(distube, queue).catch(() => {});
     };
 
     const arm = (queue, channel) => {

@@ -1332,6 +1332,39 @@ await check('parseInvocation extracts --playlist, the bang, and the query', () =
     );
 });
 
+await check('leave and disconnect destroy the voice connection, not just the player', async () => {
+    const { disconnect } = require('../lib/music');
+    const calls = [];
+    const distube = { voices: { leave: id => calls.push(['leave', id]) } };
+    const queue = { id: 'g-leave', songs: [{}], stop: async () => { calls.push(['stop']); } };
+
+    await disconnect(distube, queue);
+    assert.deepEqual(calls, [['stop'], ['leave', 'g-leave']], 'stop then leave, keyed by the queue guild');
+
+    // No queue (24/7 parked): still hang up, keyed by the explicit guild id.
+    calls.length = 0;
+    await disconnect(distube, null, 'g-leave');
+    assert.deepEqual(calls, [['leave', 'g-leave']], 'a bare connection is destroyed by guild id');
+
+    // The command itself: it must reach disconnect through ctx.distube.
+    calls.length = 0;
+    const leave = require('../commands/leave');
+    let replied = null;
+    const ctx = {
+        guild: { id: 'g-leave' },
+        user: { id: 'u' },
+        member: { voice: { channelId: 'vc' } },
+        distube: {
+            getQueue: () => queue,
+            voices: { leave: id => calls.push(['leave', id]) },
+        },
+        reply: async text => { replied = text; },
+    };
+    await leave.execute(ctx);
+    assert.ok(calls.some(c => c[0] === 'leave'), 'leave.execute reached voices.leave');
+    assert.match(replied, /Left the voice channel/);
+});
+
 // --- v3.4: soundboard path safety --------------------------------------------------
 
 const board = require('../lib/soundboard');

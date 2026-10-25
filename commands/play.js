@@ -42,7 +42,10 @@ module.exports = {
 
         // `!play! data` — the bang is the opt-out from the picker; `--playlist`
         // (prefix) or the `playlist` slash option queues the whole list.
-        const { query, direct, playlist } = parseInvocation(ctx);
+        const { query, direct, playlist } = parseInvocation({
+            args: ctx.args,
+            option: name => ctx.option(name),
+        });
         if (!query) return ctx.reply(`Usage: \`${ctx.config.prefix}play <url | search terms>\``);
 
         // Resolving through yt-dlp takes seconds, which is over the 3s interaction

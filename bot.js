@@ -230,6 +230,11 @@ client.on(Events.MessageCreate, async message => {
     const cmd = getCommand(name);
     if (!cmd) return;
 
+    // "I saw you" ack — 👀 on the invoking message. Fire-and-forget: a lost
+    // race with message deletion or missing reaction perms must never eat
+    // the command itself.
+    message.react('👀').catch(() => {});
+
     await runCommand(cmd, new Context({
         client, distube, config, commands,
         voiceIdle: idleWatcher,
@@ -300,6 +305,17 @@ async function runCommand(cmd, ctx) {
             await ctx.reply(`❌ Something went wrong: ${clip(err?.message ?? String(err), 800)}`);
         } catch {
             /* interaction may already be gone */
+        }
+    } finally {
+        // Slash ack: Discord gives no "seen" signal for a slash command until
+        // the reply lands, so 👀 the bot's own reply once it exists. Prefix
+        // commands instead react on the user's message at dispatch time
+        // (immediate, before any slow work). Never let a lost ack eat the
+        // command — swallow everything here.
+        if (ctx.isSlash) {
+            await ctx.interaction.fetchReply()
+                .then(m => m?.react?.('👀'))
+                .catch(() => {});
         }
     }
 }
