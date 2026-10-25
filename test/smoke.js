@@ -1565,6 +1565,28 @@ await check('queueResume snapshots live queues, respects TTL, and replays them',
     assert_.equal(qr.pending(G), null, 'a replayed snapshot is consumed');
 });
 
+// --- supervisor detection (lib/supervisor.js) ---------------------------------
+
+await check('supervisor.plan prefers pm2 when pm-managed, systemd unit next, neither last', async () => {
+    const supervisor = require('../lib/supervisor');
+
+    // pm2: pm_id set by the pm2 daemon -> restart by numeric app id.
+    const byPm2 = await supervisor.plan({ env: { pm_id: '3' }, systemctlActive: async () => false });
+    assert.deepEqual([byPm2.file, byPm2.args], ['pm2', ['restart', '3', '--update-env']], 'pm2 id wins over systemd');
+
+    // systemd: no pm_id, the unit reports active.
+    const bySystemd = await supervisor.plan({
+        env: { MOCKBOT_UNIT: 'mockbot' },
+        systemctlActive: async () => true,
+    });
+    assert.deepEqual([bySystemd.file, bySystemd.args], ['systemctl', ['--user', 'restart', 'mockbot']], 'active unit -> systemctl restart');
+    assert.equal(bySystemd.env.XDG_RUNTIME_DIR, `/run/user/${process.getuid()}`, 'the helper env carries the user runtime dir');
+
+    // Neither: caller must fall back to a manual-restart message, never die alone.
+    const none = await supervisor.plan({ env: {}, systemctlActive: async () => false });
+    assert.equal(none.file, null, 'no supervisor detected');
+});
+
 // --- restart warning (lib/restartWarn.js) -------------------------------------
 
 await check('restartWarn targets queue channels + command channel, deduped', async () => {

@@ -55,12 +55,14 @@ module.exports = {
         // The host is not going down after all: the next boot must not post a
         // bogus "back up" for a restart that never happened.
         restartWarn.clearPending();
+        const hint = ' (the bot process runs unprivileged: allow this user to run ' +
+            '`NOPASSWD: /usr/bin/systemctl reboot` in sudoers, or reboot from a shell)';
         if (os.fallback) {
             const second = await attempt(os.fallback);
             if (second.ok) return undefined;
-            return ctx.send(`❌ Reboot failed: ${first.error} / fallback: ${second.error}`);
+            return ctx.send(`❌ Reboot failed: ${first.error} / fallback: ${second.error}${hint}`);
         }
 
-        return ctx.send(`❌ Reboot failed: ${first.error}`);
+        return ctx.send(`❌ Reboot failed: ${first.error}${hint}`);
     },
 };

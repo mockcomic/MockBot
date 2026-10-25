@@ -1,27 +1,12 @@
-const { execFile, spawn } = require('node:child_process');
+const { execFile } = require('node:child_process');
 const path = require('node:path');
 const { SlashCommandBuilder } = require('discord.js');
 const { fenced } = require('../lib/respond');
 const restartWarn = require('../lib/restartWarn');
 const queueResume = require('../lib/queueResume');
+const supervisor = require('../lib/supervisor');
 
 const REPO_ROOT = path.join(__dirname, '..');
-
-/**
- * The systemd --user unit this deployment runs under; MOCKBOT_UNIT overrides
- * it for a differently-named install. Restarting the unit (rather than
- * killing ourselves and hoping) is how `update` applies itself.
- */
-function restartCommand() {
-    const unit = String(process.env.MOCKBOT_UNIT ?? 'mockbot').trim() || 'mockbot';
-    const env = {
-        ...process.env,
-        XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? (process.getuid ? `/run/user/${process.getuid()}` : undefined),
-        DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS
-            ?? (process.getuid ? `unix:path=/run/user/${process.getuid()}/bus` : undefined),
-    };
-    return { file: 'systemctl', args: ['--user', 'restart', unit], env };
-}
 
 /**
  * @returns {Promise<{ command: string, error: Error|null, stdout: string, stderr: string }>}
@@ -129,25 +114,26 @@ module.exports = {
             queueResume.persist();
         } catch { /* a snapshot failure only costs the queues, not the restart */ }
 
+        // Ask whatever actually supervises this process (pm2 id > systemd
+        // unit) to bounce us; see lib/supervisor.js.
+        const restart = await supervisor.plan();
+        if (!restart.file) {
+            restartWarn.clearPending();
+            return ctx.send('✅ Update finished, but I could not find my supervisor (neither pm2 nor a systemd user unit) — restart the bot manually to apply.');
+        }
         return new Promise(resolve => {
-            const cmd = restartCommand();
-            const child = spawn(cmd.file, cmd.args, { detached: true, stdio: 'ignore', env: cmd.env });
-            child.on('error', err => {
-                restartWarn.clearPending();
-                resolve(ctx.send(`❌ Could not restart the bot: ${err.message}. Apply manually (systemctl --user restart mockbot).`));
-            });
-            child.on('close', code => {
-                if (code !== 0) {
+            supervisor.spawnDetected(restart).then(result => {
+                if (!result.ok) {
                     restartWarn.clearPending();
-                    resolve(ctx.send(`❌ \`systemctl --user restart\` exited ${code}; apply manually.`));
+                    resolve(ctx.send(`❌ Could not restart via ${restart.label}: ${result.error}. Apply manually.`));
                     return;
                 }
-                // systemd accepted it; it will SIGTERM us (or we exit now and
-                // it restarts us). The SIGTERM handler snapshots + exits.
+                // The supervisor took it from here: it will SIGTERM us (or we
+                // exit now and it starts the replacement). Either way the
+                // SIGTERM handler snapshots and exits cleanly.
                 resolve(undefined);
                 process.kill(process.pid, 'SIGTERM');
             });
-            child.unref();
         });
     },
 };
