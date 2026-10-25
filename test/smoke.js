@@ -1332,6 +1332,13 @@ await check('parseInvocation extracts --playlist, the bang, and the query', () =
     );
 });
 
+await check('Staff_prefix exports PREFIX_RE for reuse by !config', () => {
+    const mod = require('../commands/Staff_prefix');
+    assert.ok(mod.PREFIX_RE instanceof RegExp, 'PREFIX_RE must be exported');
+    assert.ok(mod.PREFIX_RE.test('~#'), 'the shared regex still accepts valid prefixes');
+    assert.ok(!mod.PREFIX_RE.test('@!'), 'and still rejects mention-colliding ones');
+});
+
 await check('leave and disconnect destroy the voice connection, not just the player', async () => {
     const { disconnect } = require('../lib/music');
     const calls = [];
@@ -1363,6 +1370,91 @@ await check('leave and disconnect destroy the voice connection, not just the pla
     await leave.execute(ctx);
     assert.ok(calls.some(c => c[0] === 'leave'), 'leave.execute reached voices.leave');
     assert.match(replied, /Left the voice channel/);
+});
+
+await check('config parseValue validates each setting kind', () => {
+    const { parseValue } = require('../commands/config');
+    const guild = {
+        roles: { cache: new Map([['1'.repeat(18), { name: 'DJ' }]]) },
+        channels: { cache: new Map([['2'.repeat(18), { name: 'music', send: () => {} }]]) },
+    };
+
+    assert.equal(parseValue('autoplay', 'on'), true);
+    assert.equal(parseValue('autoplay', 'OFF'), false);
+    assert.equal(parseValue('autoplay', 'default'), null);
+    assert.throws(() => parseValue('247', 'default'), /takes on, off/, '247 is not nullable');
+    assert.throws(() => parseValue('voteskip', 'maybe'), /takes on, off or default/);
+
+    assert.equal(parseValue('djrole', `<@&${'1'.repeat(18)}>`, guild), '1'.repeat(18));
+    assert.equal(parseValue('musicchannel', '2'.repeat(18), guild), '2'.repeat(18));
+    assert.equal(parseValue('djrole', 'off', guild), null);
+    assert.throws(() => parseValue('djrole', '<@&999999999999999999>', guild), /not in this server/);
+    assert.throws(() => parseValue('musicchannel', 'nonsense', guild), /mention a real channel/);
+
+    assert.deepEqual(parseValue('autorole', `<@&${'1'.repeat(18)}> @everyone`, guild), ['1'.repeat(18)]);
+    assert.equal(parseValue('autorole', 'off', guild), null);
+    assert.throws(() => parseValue('autorole', '<@&3'.repeat(1) + '3'.repeat(17) + '>', guild), /unknown role/);
+
+    assert.equal(parseValue('prefix', '~#'), '~#');
+    assert.throws(() => parseValue('prefix', '@!'), /1-5 visible chars/);
+    assert.throws(() => parseValue('welcomemessage', 'x'.repeat(301)), /300 characters/);
+    assert.equal(parseValue('welcomemessage', 'gm {member}'), 'gm {member}');
+    assert.throws(() => parseValue('nosuch', 'x'), /unknown setting/);
+});
+
+await check('config set/reset/disable drive guildSettings, toggles, and resync', async () => {
+    const config = require('../commands/config');
+    const settings = require('../lib/guildSettings');
+    const commandToggles = require('../lib/commandToggles');
+    let resynced = 0;
+    let replied = null;
+    const fakeGuild = {
+        id: 'g-config',
+        roles: { cache: new Map([['1'.repeat(18), { name: 'DJ' }]]) },
+        channels: { cache: new Map() },
+    };
+    const ctx = {
+        guild: fakeGuild,
+        user: { id: 'u' },
+        member: { voice: null },
+        config: { prefix: '!' },
+        commands: new Map([['lyrics', { name: 'lyrics' }], ['reboot', { name: 'reboot', ownerOnly: true }]]),
+        resyncSlash: () => { resynced++; },
+        isSlash: false,
+        option: () => undefined,
+        reply: async text => { replied = typeof text === 'string' ? text : JSON.stringify(text); },
+    };
+
+    await config.execute(Object.assign(ctx, { args: ['set', '247', 'on'] }));
+    assert.equal(settings.get('g-config').twentyFourSeven, true, 'set 247 on wrote the setting');
+    assert.match(replied, /`247` = on/);
+
+    await config.execute(Object.assign(ctx, { args: ['set', 'djrole', `<@&${'1'.repeat(18)}>`] }));
+    assert.equal(settings.get('g-config').djRoleId, '1'.repeat(18), 'role mention stored by id');
+
+    await config.execute(Object.assign(ctx, { args: ['reset', '247'] }));
+    assert.equal(settings.get('g-config').twentyFourSeven, false, 'reset on a non-nullable bool means off');
+
+    await config.execute(Object.assign(ctx, { args: ['set', 'autoplay', 'default'] }));
+    assert.equal(settings.get('g-config').autoplay, null, 'default restores follow-global');
+
+    await config.execute(Object.assign(ctx, { args: ['set', 'djrole', 'garbage'] }));
+    assert.match(replied, /❌/, 'invalid value replies with the parser message');
+    assert.equal(settings.get('g-config').djRoleId, '1'.repeat(18), 'and did not overwrite');
+
+    await config.execute(Object.assign(ctx, { args: ['disable', 'lyrics'] }));
+    assert.equal(commandToggles.enabled('lyrics', 'g-config'), false, 'disable wrote a guild override');
+    assert.equal(resynced, 1, 'a toggle re-registers the slash command list');
+
+    await config.execute(Object.assign(ctx, { args: ['disable', 'reboot'] }));
+    assert.match(replied, /owner-only/, 'owner commands refuse guild toggles');
+
+    await config.execute(Object.assign(ctx, { args: ['enable', 'lyrics'] }));
+    assert.equal(commandToggles.enabled('lyrics', 'g-config'), true, 'enable clears the override');
+    assert.equal(resynced, 2);
+
+    await config.execute(Object.assign(ctx, { args: ['show'] }));
+    assert.ok(Array.isArray(JSON.parse(replied).embeds), 'show answers with an embed');
 });
 
 // --- v3.4: soundboard path safety --------------------------------------------------

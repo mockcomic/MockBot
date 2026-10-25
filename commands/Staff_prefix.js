@@ -60,3 +60,6 @@ module.exports = {
         );
     },
 };
+
+// Shared with commands/config.js so the prefix grammar lives in exactly one place.
+module.exports.PREFIX_RE = PREFIX_RE;

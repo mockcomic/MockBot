@@ -238,6 +238,7 @@ client.on(Events.MessageCreate, async message => {
     await runCommand(cmd, new Context({
         client, distube, config, commands,
         voiceIdle: idleWatcher,
+        resyncSlash: () => void resyncSlashCommands(),
         message,
         args: parts,
     }));
@@ -271,6 +272,7 @@ client.on(Events.InteractionCreate, async interaction => {
     await runCommand(cmd, new Context({
         client, distube, config, commands,
         voiceIdle: idleWatcher,
+        resyncSlash: () => void resyncSlashCommands(),
         interaction,
         args,
     }));
