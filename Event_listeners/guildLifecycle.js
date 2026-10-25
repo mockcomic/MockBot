@@ -23,7 +23,7 @@ const DEFAULT_WELCOME = '👋 {member} joined **{guild}** — you are member #{c
 function renderWelcome(template, member) {
     const count = member?.guild?.memberCount ?? '?';
     return String(template ?? DEFAULT_WELCOME)
-        .replaceAll('{member}', member.toString())   // mention, already capped by Discord
+        .replaceAll('{member}', `<@${member?.id}>`)   // raw-id mention: works even for a member mid-kick
         .replaceAll('{guild}', clip(member?.guild?.name ?? 'the server', 100))
         .replaceAll('{count}', String(count));
 }

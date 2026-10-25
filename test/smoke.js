@@ -436,6 +436,12 @@ await check('ytDlpArgs controls --no-playlist and never caps the list', () => {
         assert.ok(!args.includes('--playlist-items'), 'no 100-song cap anymore');
     }
     assert.deepEqual(ytDlpArgs(bare, { extraArgs: ['--flat-playlist'] }).slice(-1), ['--flat-playlist']);
+
+    // The autoplay radio-mix path bounds entries explicitly (regression: the
+    // removed PLAYLIST_ITEM_CAP used to do this for every resolve call).
+    const capped = ytDlpArgs(bare, { playlistItems: 25 });
+    assert.ok(capped.includes('--playlist-items') && capped.includes('1-25'), 'playlistItems caps the dump');
+    assert.ok(!ytDlpArgs(bare, {}).includes('--playlist-items'), 'no cap unless asked');
 });
 
 await check('playlistEntries keeps only playlist rows from a flat search', () => {
@@ -1150,6 +1156,7 @@ const lifecycle = require('../Event_listeners/guildLifecycle');
 
 await check('welcome template renders placeholders and survives junk', () => {
     const member = {
+        id: '99',
         toString: () => '<@99>',
         guild: { name: 'Test Guild', memberCount: 1234 },
     };
@@ -1445,6 +1452,12 @@ await check('config set/reset/disable drive guildSettings, toggles, and resync',
     await config.execute(Object.assign(ctx, { args: ['disable', 'lyrics'] }));
     assert.equal(commandToggles.enabled('lyrics', 'g-config'), false, 'disable wrote a guild override');
     assert.equal(resynced, 1, 'a toggle re-registers the slash command list');
+
+    // Lockout trap: staff disabling `config` hides the only way back.
+    ctx.commands.set('config', { name: 'config' });
+    await config.execute(Object.assign(ctx, { args: ['disable', 'config'] }));
+    assert.match(replied, /cannot disable itself/, 'self-disable is refused for non-owners');
+    assert.equal(commandToggles.enabled('config', 'g-config'), true, 'and no override was written');
 
     await config.execute(Object.assign(ctx, { args: ['disable', 'reboot'] }));
     assert.match(replied, /owner-only/, 'owner commands refuse guild toggles');

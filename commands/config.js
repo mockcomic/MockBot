@@ -102,8 +102,11 @@ function parseValue(key, raw, guild = null) {
         return ids;
     }
     if (row.text) {
-        if (!text) throw new Error(`\`${key}\` needs a value (or \`off\` to clear)`);
-        if (/^(off|none|clear|default)$/i.test(text) && row.nullable) return null;
+        if (!text) throw new Error(`\`${key}\` needs a value${row.nullable ? ' (or `off` to clear)' : ''}`);
+        if (/^(off|none|clear|default)$/i.test(text)) {
+            if (row.nullable) return null;
+            throw new Error(`\`${key}\` cannot be cleared`);
+        }
         if (text.length > row.text) throw new Error(`\`${key}\` is limited to ${row.text} characters`);
         if (row.re && !row.re.test(text)) throw new Error(row.reMsg);
         return text;
@@ -160,9 +163,11 @@ module.exports = {
             : String(ctx.args[0] ?? 'show').toLowerCase();
         const E = { ephemeral: true };
 
+        // Only this server's OWN overrides — a global (portal-side) disable is
+        // not the guild's doing and must not show up on their list.
         const disabledHere = commandToggles
             .view([...ctx.commands.keys()], guildId)
-            .filter(t => !t.enabled)
+            .filter(t => t.guildOverride === 'off')
             .map(t => t.name);
 
         if (sub === 'show' || !sub) {
@@ -199,6 +204,12 @@ module.exports = {
             const cmd = ctx.commands.get(name);
             if (!cmd) return ctx.reply(`❌ There is no command called \`${name}\`.`, E);
             if (cmd.ownerOnly) return ctx.reply(`⛔ \`${name}\` is owner-only — servers cannot toggle it.`, E);
+            // The lockout trap: `config` is the only way back from a guild
+            // disable, so it cannot disable itself (the bot owner passes
+            // runCommand's toggle gate and can always re-enable).
+            if (name === 'config' && sub === 'disable' && !require('../lib/access').isOwner(ctx.user?.id)) {
+                return ctx.reply('⛔ `config` cannot disable itself — that would lock you out of re-enabling it from Discord.', E);
+            }
             commandToggles.setGuild(guildId, name, sub === 'enable', { ownerOnly: Boolean(cmd.ownerOnly) });
             ctx.resyncSlash?.();
             return ctx.reply(`${sub === 'enable' ? '✅' : '🚫'} \`${name}\` is now ${sub === 'enable' ? 'enabled' : 'disabled'} in this server.`, E);
