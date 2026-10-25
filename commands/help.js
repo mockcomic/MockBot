@@ -13,7 +13,7 @@ const { clip } = require('../lib/respond');
 const MUSIC = new Set([
     'play', 'skip', 'previous', 'stop', 'pause', 'queue', 'nowplaying', 'volume',
     'jump', 'repeat', 'remove', 'clear', 'seek', 'shuffle', 'filter',
-    'playlist', 'lyrics', 'autoplay', '247', 'leave', 'voteskip',
+    'playlist', 'lyrics', 'autoplay', '247', 'leave', 'voteskip', 'sleep',
 ]);
 
 function bucketOf(cmd) {

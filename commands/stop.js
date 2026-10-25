@@ -1,5 +1,6 @@
 const { SlashCommandBuilder } = require('discord.js');
 const { requireQueue, isBlocked } = require('../lib/musicGuards');
+const queueResume = require('../lib/queueResume');
 
 module.exports = {
     name: 'stop',
@@ -12,6 +13,7 @@ module.exports = {
         if (isBlocked(guard)) return ctx.reply(guard.reply);
 
         await guard.queue.stop();
+        queueResume.forget(ctx.guild.id); // a manual stop must not come back on restart
         return ctx.reply('⏹️ Stopped the music!');
     },
 };

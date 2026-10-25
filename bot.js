@@ -14,6 +14,7 @@ const usage = require('./lib/usage');
 const cooldowns = require('./lib/cooldowns');
 const components = require('./lib/components');
 const reminders = require('./lib/reminders');
+const queueResume = require('./lib/queueResume');
 require('./lib/musicUi'); // registers the mb: control handlers with components.js
 require('./lib/searchPicker'); // registers the mb:pick handler (play result picker)
 const setupMusicEvents = require('./Event_listeners/musicBot');
@@ -197,6 +198,15 @@ client.once(Events.ClientReady, async readyClient => {
     // Deliver reminders that came due while the bot was down and arm the timer.
     reminders.start(readyClient);
 
+    // Rejoin + requeue anything a previous run left behind (6h TTL).
+    queueResume.resumeAll(distube, readyClient)
+        .then(results => {
+            for (const [guildId, status, detail] of results) {
+                console.log(`[queueResume] guild ${guildId}: ${status}${detail ? ` (${detail})` : ''}`);
+            }
+        })
+        .catch(err => console.error('[queueResume] resume pass failed', err));
+
     // Live-stream announcements poller (no-op until `watch add` fills the list).
     liveWatch.start({ client: readyClient });
 
@@ -329,5 +339,17 @@ applyAllowedPrivilegedIntents()
         console.error('Check that TOKEN in .env is valid, and that the bot application is still active.');
         process.exit(1);
     });
+
+// Restart-resilience: systemd stop / `!update` land here as SIGTERM. Snapshot
+// every live queue BEFORE the process goes, so the next boot can resume it
+// (see queueResume.resumeAll in ClientReady). SIGKILL still loses at most the
+// changes since the last add/addList snapshot.
+process.on('SIGTERM', () => {
+    queueResume.markShutdown();
+    const n = queueResume.snapshotAll(distube);
+    queueResume.persist();
+    console.log(`[queueResume] SIGTERM: snapshotted ${n} queue(s).`);
+    process.exit(0);
+});
 
 module.exports = { client, distube, config, commands };

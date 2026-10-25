@@ -1470,6 +1470,104 @@ await check('config set/reset/disable drive guildSettings, toggles, and resync',
     assert.ok(Array.isArray(JSON.parse(replied).embeds), 'show answers with an embed');
 });
 
+// --- queue resume across restarts + sleep timer -----------------------------------
+
+await check('queueResume snapshots live queues, respects TTL, and replays them', async () => {
+    const qr = require('../lib/queueResume');
+    const assert_ = require('node:assert');
+    const G = 'g-resume';
+
+    const queue = {
+        id: G,
+        voiceChannel: { id: 'vc-9', name: 'Music' },
+        textChannel: { id: 'tc-9' },
+        songs: [
+            { url: 'https://www.youtube.com/watch?v=aaaaaaaa', name: 'One', duration: 100, thumbnail: null },
+            { url: 'https://www.youtube.com/watch?v=bbbbbbbb', name: 'Two', duration: 200 },
+            { url: 'data/sounds/horn', name: 'sfx', source: 'file' }, // no url: dropped
+        ],
+    };
+    assert_.equal(qr.snapshotQueue(queue), true);
+    const entry = qr.pending(G);
+    assert_.equal(entry.songs.length, 2, 'only url-bearing rows are stored');
+    assert_.equal(entry.voiceChannelId, 'vc-9');
+
+    // A manual stop forgets the queue: it must not come back.
+    qr.forget(G);
+    assert_.equal(qr.pending(G), null, 'forget removes the snapshot');
+
+    // Re-snapshot and expire it: the TTL drops stale queues.
+    qr.snapshotQueue(queue);
+    qr.load().get(G).savedAt = Date.now() - qr.MAX_AGE_MS - 1000;
+    assert_.equal(qr.pending(G), null, 'a stale snapshot is dropped, not replayed');
+
+    // Replay: fresh snapshot against a fake distube/client.
+    qr.snapshotQueue(queue);
+    const textSends = [];
+    const played = [];
+    const distubeStub = {
+        plugins: [],
+        play: async (channel, what) => { played.push({ channelId: channel.id, what }); },
+    };
+    const clientStub = {
+        guilds: { cache: new Map([['g-resume', {
+            id: 'g-resume',
+            members: { me: {} },
+            channels: {
+                cache: new Map([
+                    ['vc-9', { id: 'vc-9', isJoinable: true, name: 'Music' }],
+                    ['tc-9', { id: 'tc-9', send: async t => textSends.push(t) }],
+                ]),
+                fetch: async () => null,
+            },
+        }]]) },
+    };
+    const results = await qr.resumeAll(distubeStub, clientStub);
+    assert_.deepEqual(results, [['g-resume', 'resumed', 2]], 'resume reports the guild and song count');
+    assert_.equal(played[0].channelId, 'vc-9', 'the bot re-queued into the saved voice channel');
+    assert_.equal(played[0].what.songs.length, 2, 'both songs ride in one Playlist');
+    assert_.match(textSends[0], /Resumed 2 songs/, 'the text channel is told');
+    assert_.equal(qr.pending(G), null, 'a replayed snapshot is consumed');
+});
+
+await check('sleep timer arms, replaces, and cancels', () => {
+    const sleep = require('../commands/sleep');
+    let replied = null;
+    let disconnects = 0;
+    const distube = {
+        getQueue: () => null,
+        once: () => {},
+        off: () => {},
+    };
+    const ctx = {
+        guild: { id: 'g-sleep' },
+        config: { prefix: '!' },
+        distube,
+        option: () => undefined,
+        args: ['15'],
+        reply: async t => { replied = t; },
+    };
+    return (async () => {
+        await sleep.execute(ctx);
+        assert.ok(sleep.timers.has('g-sleep'), 'sleep 15 armed a timer');
+        const first = sleep.timers.get('g-sleep').until;
+
+        await sleep.execute(Object.assign(ctx, { args: ['30'] }));
+        assert.ok(sleep.timers.get('g-sleep').until > first, 're-setting replaces the timer');
+
+        await sleep.execute(Object.assign(ctx, { args: ['off'] }));
+        assert.equal(sleep.timers.has('g-sleep'), false, 'off cancels');
+        assert.match(replied, /cancelled/);
+
+        await sleep.execute(Object.assign(ctx, { args: ['99999'] }));
+        assert.match(replied, /❌/, 'out of range is refused');
+        assert.equal(sleep.timers.has('g-sleep'), false);
+
+        await sleep.execute(Object.assign(ctx, { args: ['queue'] }));
+        assert.match(replied, /Nothing is playing/, 'queue mode with no queue says so');
+    })();
+});
+
 // --- v3.4: soundboard path safety --------------------------------------------------
 
 const board = require('../lib/soundboard');

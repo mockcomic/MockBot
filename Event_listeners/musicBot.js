@@ -2,6 +2,7 @@ const { EmbedBuilder } = require('discord.js');
 const { COLOR, songLink, statusLine } = require('../lib/musicFormat');
 const { disconnect } = require('../lib/music');
 const { clip } = require('../lib/respond');
+const queueResume = require('../lib/queueResume');
 const { controlRow } = require('../lib/musicUi');
 const autoplay = require('../lib/autoplay');
 const history = require('../lib/playHistory');
@@ -43,6 +44,7 @@ module.exports = function setupMusicEvents(distube, deps = {}) {
             });
         })
         .on('addSong', (queue, song) => {
+            queueResume.snapshotQueue(queue); // keep the restart snapshot fresh
             // Same URL already pending? Say so and give its row, so a repeated
             // play does not look like it vanished into the list.
             const dupIndex = queue.songs.findIndex(
@@ -61,8 +63,9 @@ module.exports = function setupMusicEvents(distube, deps = {}) {
                 ],
             });
         })
-        .on('addList', (queue, playlist) =>
-            send(queue, {
+        .on('addList', (queue, playlist) => {
+            queueResume.snapshotQueue(queue);
+            return send(queue, {
                 embeds: [
                     new EmbedBuilder()
                         .setColor(COLOR.list)
@@ -71,10 +74,11 @@ module.exports = function setupMusicEvents(distube, deps = {}) {
                             `(${playlist.songs.length} songs) to queue\n${statusLine(queue)}`,
                         ),
                 ],
-            }),
-        )
+            });
+        })
         .on('finish', async queue => {
             const guildId = queue.id;
+            queueResume.forget(guildId); // the queue ended on its own — nothing to resume
 
             if (autoplay.enabledFor(guildId, config) && autoplay.canContinue(guildId)) {
                 const next = await autoplay.nextSong(distube, guildId, {
@@ -125,6 +129,9 @@ module.exports = function setupMusicEvents(distube, deps = {}) {
         // "the room emptied out" is handled by Event_listeners/voiceIdle.js.
         .on('disconnect', queue => {
             history.recordAbandon(queue); // stop() mid-song = skipped
+            // A queue that ended on purpose must not come back after a
+            // restart; unless the bot itself is going down (snapshot wins).
+            if (!queueResume.isShuttingDown()) queueResume.forget(queue.id);
             send(queue, {
                 embeds: [
                     new EmbedBuilder()
