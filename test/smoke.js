@@ -1557,11 +1557,66 @@ await check('queueResume snapshots live queues, respects TTL, and replays them',
         }]]) },
     };
     const results = await qr.resumeAll(distubeStub, clientStub);
-    assert_.deepEqual(results, [['g-resume', 'resumed', 2]], 'resume reports the guild and song count');
+    assert_.deepEqual(results, [['g-resume', 'resumed', { songs: 2, textChannelId: 'tc-9' }]],
+        'resume reports the guild and the resumed channel');
     assert_.equal(played[0].channelId, 'vc-9', 'the bot re-queued into the saved voice channel');
     assert_.equal(played[0].what.songs.length, 2, 'both songs ride in one Playlist');
     assert_.match(textSends[0], /Resumed 2 songs/, 'the text channel is told');
     assert_.equal(qr.pending(G), null, 'a replayed snapshot is consumed');
+});
+
+// --- restart warning (lib/restartWarn.js) -------------------------------------
+
+await check('restartWarn targets queue channels + command channel, deduped', async () => {
+    const rw = require('../lib/restartWarn');
+    const sent = [];
+    const mkChannel = id => ({ id, send: async m => { sent.push([id, m]); return { edit: async () => {} }; } });
+    const cmdCh = mkChannel('tc-cmd');
+    const queueCh = mkChannel('tc-queue');
+    const guildsWithQueues = {
+        g1: { textChannel: queueCh },
+        g2: { textChannel: cmdCh },      // queue in the SAME channel as the command
+        g3: { textChannel: null },       // deleted text channel: skipped
+    };
+    const client = { guilds: { cache: new Map([['g1', { id: 'g1' }], ['g2', { id: 'g2' }], ['g3', { id: 'g3' }]]) } };
+    const distube = { getQueue: gid => guildsWithQueues[gid] ?? null };
+    const ctx = { channel: cmdCh };
+
+    const targets = await rw.targetChannels(client, distube, ctx);
+    assert.deepEqual(targets.map(c => c.id), ['tc-cmd', 'tc-queue'], 'command channel first, queue channels after, deduped, null skipped');
+});
+
+await check('restartWarn warn() posts everywhere and records the pending restart', async () => {
+    const rw = require('../lib/restartWarn');
+    const fs_ = require('node:fs');
+    const sent = [];
+    const mkChannel = id => ({ id, send: async m => { sent.push([id, String(m)]); return {}; } });
+    const client = { guilds: { cache: new Map() } };
+    const distube = { getQueue: () => null };
+    const ctx = { channel: mkChannel('tc-cmd') };
+
+    const channels = await rw.warn(client, distube, ctx, 'update');
+    assert.equal(channels.length, 1);
+    assert.match(sent[0][1], /10 seconds/, 'the warning announces the delay');
+
+    const record = JSON.parse(fs_.readFileSync(rw.PENDING_FILE, 'utf8'));
+    assert.equal(record.kind, 'update');
+    assert.deepEqual(record.channelIds, ['tc-cmd'], 'warned channel ids are recorded for the recovery pass');
+
+    const taken = await rw.takePending();
+    assert.equal(taken.kind, 'update', 'takePending returns the record once');
+    assert.equal(await rw.takePending(), null, 'and deletes the file');
+});
+
+await check('restartWarn takePending ignores a stale record', async () => {
+    const rw = require('../lib/restartWarn');
+    const fs_ = require('node:fs');
+    await rw.warn({ guilds: { cache: new Map() } }, { getQueue: () => null },
+        { channel: { id: 'x', send: async () => ({}) } }, 'reboot');
+    const record = JSON.parse(fs_.readFileSync(rw.PENDING_FILE, 'utf8'));
+    record.savedAt = Date.now() - rw.PENDING_MAX_AGE_MS - 1000;
+    fs_.writeFileSync(rw.PENDING_FILE, JSON.stringify(record));
+    assert.equal(await rw.takePending(), null, 'a week-old record never announces a recovery');
 });
 
 await check('sleep timer arms, replaces, and cancels', () => {

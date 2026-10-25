@@ -41,14 +41,20 @@ module.exports = {
 
     async execute(ctx) {
         const os = plan();
+        const restartWarn = require('../lib/restartWarn');
+        await restartWarn.warn(ctx.client, ctx.distube, ctx, 'reboot');
         await ctx.reply(
-            `⚠️ Rebooting the **host machine** (${os.label}) — this stops everything else running on it, ` +
+            `⚠️ Rebooting the **host machine** (${os.label}) in ${restartWarn.WARN_SECONDS} seconds — this stops everything else running on it, ` +
             'not just the bot. Back in a moment :(',
         );
+        await restartWarn.sleep(restartWarn.WARN_SECONDS * 1000);
 
         const first = await attempt(os.primary);
         if (first.ok) return undefined;
 
+        // The host is not going down after all: the next boot must not post a
+        // bogus "back up" for a restart that never happened.
+        restartWarn.clearPending();
         if (os.fallback) {
             const second = await attempt(os.fallback);
             if (second.ok) return undefined;

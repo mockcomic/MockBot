@@ -17,6 +17,7 @@ const cooldowns = require('./lib/cooldowns');
 const components = require('./lib/components');
 const reminders = require('./lib/reminders');
 const queueResume = require('./lib/queueResume');
+const restartWarn = require('./lib/restartWarn');
 require('./lib/musicUi'); // registers the mb: control handlers with components.js
 require('./lib/searchPicker'); // registers the mb:pick handler (play result picker)
 const setupMusicEvents = require('./Event_listeners/musicBot');
@@ -204,11 +205,29 @@ client.once(Events.ClientReady, async readyClient => {
     // Rejoin + requeue anything a previous run left behind (6h TTL).
     queueResume.resumeAll(distube, readyClient)
         .then(results => {
+            const announced = new Set();
             for (const [guildId, status, detail] of results) {
-                console.log(`[queueResume] guild ${guildId}: ${status}${detail ? ` (${detail})` : ''}`);
+                if (status === 'resumed' && detail?.textChannelId) announced.add(detail.textChannelId);
+                const note = typeof detail === 'object' && detail !== null ? `${detail.songs} song(s)` : detail ?? '';
+                console.log(`[queueResume] guild ${guildId}: ${status}${note ? ` (${note})` : ''}`);
             }
+            return { results, announced };
         })
-        .catch(err => console.error('[queueResume] resume pass failed', err));
+        .catch(err => {
+            console.error('[queueResume] resume pass failed', err);
+            return { results: [], announced: new Set() };
+        })
+        .then(({ announced }) => restartWarn.takePending()
+            .then(pending => {
+                // Announce recovery where the resume message did not already speak.
+                return Promise.all((pending?.channelIds ?? []).map(async id => {
+                    if (announced.has(id)) return;
+                    const ch = readyClient.channels.cache.get(id)
+                        ?? await readyClient.channels.fetch(id).catch(() => null);
+                    await ch?.send?.('✅ MockBot is back up.').catch(() => {});
+                }));
+            })
+            .catch(err => console.error('[restartWarn] recovery pass failed', err)));
 
     // Live-stream announcements poller (no-op until `watch add` fills the list).
     liveWatch.start({ client: readyClient });
